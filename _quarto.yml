@@ -1,0 +1,10 @@
+project:
+  output-dir: docs
+
+title: Measles Dashboard - OCB
+subtitle: Cox's Bazaar - April 2026
+
+format: 
+  dashboard:
+    orientation: columns
+    theme: yeti

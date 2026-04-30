@@ -1,0 +1,25 @@
+/* Remove outer outlines around dashboard blocks */
+.dashboard .card,
+.dashboard .value-box,
+.dashboard .bslib-value-box {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove the default dashboard block outline */
+.card {
+  border: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important; /* optional: makes it blend into the page */
+}
+
+/* Align dashboard row content to the top */
+.dashboard .grid .grid-row {
+  align-items: flex-start !important;
+}
+
+/* Red line under the first row */
+.dashboard .grid .grid-row:first-child {
+  border-bottom: 3px solid red;
+  margin-bottom: 10px; /* optional spacing below the line */
+}
