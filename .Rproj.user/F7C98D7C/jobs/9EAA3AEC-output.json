@@ -1,0 +1,6 @@
+[1,"==> quarto preview index.qmd --to dashboard --no-watch-inputs --no-browse\n\n"]
+[1,"\r\n\r\nprocessing file: index.qmd\r\n\r  |                                                        \r  |                                                  |   0%\r  |                                                        \r  |...                                               |   5%                    \r  |                                                        \r  |.....                                             |  11% [load packages]    "]
+[1,"\r  |                                                        \r  |........                                          |  16%                    \r  |                                                        \r  |...........                                       |  21% [import data]      "]
+[1,"\r\n\r\nError in `file()`:\r\n! cannot open the connection\r\nBacktrace:\r\n    ▆\r\n 1. └─utils::read.csv(here(\"data/measles_data.csv\"), sep = \";\")\r\n 2.   └─utils::read.table(...)\r\n 3.     └─base::file(file, \"rt\")\r\n"]
+[1,"\r\r\nQuitting from index.qmd:26-107 [import data]\r\n                                                                                                              \r\nExecution halted\r\n"]
+[1,"WARN: Error encountered when rendering files\n"]
