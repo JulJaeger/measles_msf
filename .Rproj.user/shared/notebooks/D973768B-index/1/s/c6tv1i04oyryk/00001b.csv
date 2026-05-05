@@ -1,5 +1,5 @@
 "0","# case data"
-"0","measles_data_imp <- read.csv(here(""data/measles_data.csv""), sep = "";"")"
+"0","measles_data_imp <- read.csv(here(""data/measles_data.csv""), sep = "";"") "
 "0",""
 "0","measles_data <- measles_data_imp %>% "
 "0","  clean_names() %>% "

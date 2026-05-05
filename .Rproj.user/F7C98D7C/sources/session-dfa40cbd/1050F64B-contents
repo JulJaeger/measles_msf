@@ -1,0 +1,415 @@
+---
+
+title: "Measles Cases – Cox’s Bazaar"
+subtitle: "April – May 2026"
+date: "2026-05-05"
+output:
+  pdf_document:
+    latex_engine: xelate
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+pacman::p_load(
+  rio, janitor, lubridate, skimr, epikit, gtsummary, here,
+  tidyverse, knitr, flextable, tibble, epitools, readxl, sf,
+  terra, ggspatial, ggplot2, mdsr, spData, readr, leaflet,
+  gganimate, plotly, stringi, gt, officer, tinytex, ggrepel,
+  reactable, MASS, broom, openxlsx, dplyr, bslib, htmltools
+)
+```
+
+```{r import data}
+# case data
+measles_data_imp <- read.csv(here("data/measles_data.csv")
+)
+
+measles_data <- measles_data_imp %>% 
+  clean_names() %>% 
+  dplyr::select(-c(1:2, 6, 7, 9, 10, 18:20, 23, 25, 30, 32, 38, 40, 41, 42, 53, 58, 59, 69, 70, 73, 73,  90, 97:103)) %>% 
+  mutate(
+    camp = if_else(
+      camp == "other",
+      specify_other_camp,
+      camp
+    )
+  ) %>% 
+  dplyr::select(-specify_other_camp) %>% 
+  mutate(
+    block = str_remove(block, "^block_"),
+    camp = str_replace(camp, "^camp_", "Camp ")
+  ) %>% 
+  mutate(
+    camp = if_else(
+      camp == "KTP Register Camp", "Kutupalong RC",
+      camp
+    )
+  ) %>% 
+  mutate(
+    camp = case_when(
+      camp %in% c("Camp 1", "Camp 8") ~ paste0(camp, "E"),
+      TRUE ~ camp
+    )
+  ) %>% 
+  mutate(
+    date_of_visit = as.Date(date_of_visit, format = "%d/%m/%Y")
+  ) %>% 
+  mutate(block = stringr::str_to_sentence(block))
+
+#map data
+sub_blocks <- st_read(here("data/Block_Boundary_V1/Block_Boundary_V1.shp"), quiet = TRUE) %>% 
+  filter(!CampName_1 %in% c("Camp 21", "Camp 22", "Camp 24", "Camp 25", "Camp 26", "Camp 27", "Nayapara RC")) %>% 
+  mutate(CampName_1 = str_remove(CampName_1, " Extension$"))
+
+#merge datasets
+cases_sf <- measles_data %>%
+  left_join(
+    sub_blocks,
+    by = c("camp" = "CampName_1",
+           "block" = "BlockLabel"
+           )
+  ) %>%
+  st_as_sf()
+
+# points for map
+cases_points <- cases_sf %>%
+  filter(!is.na(District)) %>% 
+  mutate(
+    geometry = map(
+      geometry,
+      ~ st_sample(.x, size = 1) %>% st_cast("POINT")
+    )
+  ) %>%
+  unnest(geometry) %>%
+  st_as_sf() %>%
+  st_set_crs(st_crs(sub_blocks))
+
+camp_boundaries <- sub_blocks %>%
+  group_by(CampName_1) %>%
+  summarise(
+    geometry = sf::st_union(geometry),
+    .groups = "drop"
+  )
+
+epi_cases <- measles_data %>%
+  filter(!is.na(date_of_visit)) %>% 
+  arrange(date_of_visit) %>%
+  group_by(date_of_visit) %>%
+  mutate(
+    case_id = row_number(),
+    hover_text = paste0(
+      "Sex: ", gender, "<br>",
+      "Age: ", age_in_years, " years<br>"
+    )
+  ) %>%
+  ungroup()
+```
+
+```{r calculate numbers}
+# Total cases
+total_cases <- nrow(measles_data)
+
+# Severe cases
+severe_cases <- measles_data %>%
+  filter(clinical_severity == "severe") %>%
+  nrow()
+
+# Simple cases
+simple_cases <- measles_data %>%
+  filter(clinical_severity == "simple") %>%
+  nrow()
+
+# Weekly cases (last 7 days)
+weekly_cases <- measles_data %>%
+  filter(date_of_visit >= Sys.Date() - 7) %>%
+  nrow()
+
+# Weekly severe cases
+weekly_severe_cases <- measles_data %>%
+  filter(date_of_visit >= Sys.Date() - 7,
+         clinical_severity == "severe") %>%
+  nrow()
+
+# Weekly simple cases
+weekly_simple_cases <- measles_data %>%
+  filter(date_of_visit >= Sys.Date() - 7,
+         clinical_severity == "simple") %>%
+  nrow()
+
+# Yesterday's cases
+yesterdays_cases <- measles_data %>%
+  filter(date_of_visit == Sys.Date() - 1) %>%
+  nrow()
+
+# Yesterday's severe cases
+yesterdays_severe_cases <- measles_data %>%
+  filter(date_of_visit == Sys.Date() - 1,
+         clinical_severity == "severe") %>%
+  nrow()
+
+# Yesterday's simple cases
+yesterdays_simple_cases <- measles_data %>%
+  filter(date_of_visit == Sys.Date() - 1,
+         clinical_severity == "simple") %>%
+  nrow()
+```
+
+```{r}
+vaccinated <- measles_data %>% 
+  summarise(
+    vaccinated = sum(did_the_patient_receive_measle == "yes", na.rm = TRUE),
+    total = n(),
+    percent_vaccinated = vaccinated / total * 100
+  )
+
+sam <- measles_data %>% 
+  summarise(
+    final_diagnoses_severe_acute_malnutrition = sum (final_diagnoses_severe_acute_malnutrition == TRUE, na.rm = TRUE),
+total = n())
+
+mam <- measles_data %>% 
+  summarise(
+    final_diagnoses_moderate_acute_malnutrition = sum (final_diagnoses_moderate_acute_malnutrition == TRUE, na.rm = TRUE),
+total = n())
+```
+
+### Epicurve  
+```{r epicurve, results='asis'}
+epi_curve <- ggplot(
+  epi_cases,
+  aes(x = date_of_visit, y = case_id, fill = clinical_severity, text = hover_text)
+) +
+  geom_tile(
+    width = 0.9,
+    height = 0.9,
+    color = "black"
+  ) +
+  scale_x_date(
+    date_breaks = "1 day",
+    date_labels = "%d %b",
+    expand = c(0, 0)
+  ) +
+  labs(
+    x = "Date",
+    y = "Cases",
+    fill = "Clinical severity"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.margin = margin(5, 5, 5, 5)
+  )
+
+epi_curve_interactive <- ggplotly(
+  epi_curve,
+  tooltip = "text"
+) %>%
+  config(displayModeBar = FALSE)
+
+
+div(
+  style = "display:flex; justify-content:center;",
+  div(style = "width:900px;", epi_curve_interactive)
+)
+```
+### Geographical distribution of cases
+```{r first map, fig.show="hold", out.width="50%", fig.margin=FALSE}
+map_dots <- ggplot() +
+  geom_sf(
+    data = sub_blocks,
+    fill = "white",
+    color = "grey80",
+    linewidth = 0.1
+  ) + 
+geom_sf(
+    data = camp_boundaries,
+    fill = NA,
+    color = "black",
+    linewidth = 0.7
+  ) +
+  geom_sf(
+    data = cases_points,
+    aes(color = clinical_severity),
+    size = 3,
+    alpha = 0.7
+  ) +
+  coord_sf(expand = FALSE) +
+  theme_light() +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    panel.spacing = unit(0, "pt"),
+    panel.background = element_rect(fill = "white", color = NA)
+  ) +
+  labs(
+       color = "Clinical severity") +
+  theme(plot.title = element_text(face = "bold", size = 22),
+        plot.subtitle = element_text(size = 18),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+        axis.text.y = element_text(angle = 45, hjust = 1, size = 14),
+        legend.title = element_text(face = "bold", size = 16),
+        legend.text = element_text(size = 14)) +
+  theme(
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  plot.background = element_blank()
+) %>% 
+theme(
+  plot.margin = margin(0, 0, 0, 0),
+  panel.spacing = unit(0, "pt"),
+  legend.margin = margin(0, 0, 0, 0)
+) %>% 
+  theme(legend.position = "bottom")
+
+print(map_dots)
+
+second_map_dots <- ggplot() +
+  geom_sf(
+    data = sub_blocks,
+    fill = "white",
+    color = "grey80",
+    linewidth = 0.1
+  ) + 
+geom_sf(
+    data = camp_boundaries,
+    fill = NA,
+    color = "black",
+    linewidth = 0.7
+  ) +
+  geom_sf(
+    data = cases_points,
+    aes(color = phc),
+    size = 3,
+    alpha = 0.7
+  ) +
+  coord_sf(expand = FALSE) +
+  theme_light() +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    panel.spacing = unit(0, "pt"),
+    panel.background = element_rect(fill = "white", color = NA)
+  ) +
+  labs(
+       color = "Place of Treatment") +
+  theme(plot.title = element_text(face = "bold", size = 22),
+        plot.subtitle = element_text(size = 18),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+        axis.text.y = element_text(angle = 45, hjust = 1, size = 14),
+        legend.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 12)) +
+  theme(
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  plot.background = element_blank()
+) %>% 
+theme(
+  plot.margin = margin(0, 0, 0, 0),
+  panel.spacing = unit(0, "pt"),
+  legend.margin = margin(0, 0, 0, 0)
+) %>% 
+  theme(legend.position = "bottom")
+
+print(second_map_dots)
+```
+
+### Absolute number of cases until today
+```{r values 1}
+group_border <- fp_border(color = "black", width = 1)
+
+summary_wide <- tibble::tibble(
+  Metric = c("Total", "Weekly", "Yesterday"),
+  Total  = c(total_cases, weekly_cases, yesterdays_cases),
+  Severe = c(severe_cases, weekly_severe_cases, yesterdays_severe_cases),
+  Simple = c(simple_cases, weekly_simple_cases, yesterdays_simple_cases)
+)
+summary_wide  <- flextable(summary_wide)
+
+summary_wide
+ 
+```
+```{r}
+summary_all <- tibble::tibble(
+  Category = c(
+    "Vaccination", "Vaccination", "Vaccination",
+    "Nutrition (SAM)", "Nutrition (SAM)",
+    "Nutrition (MAM)", "Nutrition (MAM)"
+  ),
+  Metric = c(
+    "Vaccinated",
+    "Total cases",
+    "Percent vaccinated (%)",
+    "SAM cases",
+    "Total cases",
+    "MAM cases",
+    "Total cases"
+  ),
+  Value = c(
+    vaccinated$vaccinated,
+    vaccinated$total,
+    round(vaccinated$percent_vaccinated, 1),
+    sam$final_diagnoses_severe_acute_malnutrition,
+    sam$total,
+    mam$final_diagnoses_moderate_acute_malnutrition,
+    mam$total
+  )
+)
+
+
+summary_all_ft <- flextable(summary_all) %>%
+  
+set_header_labels(
+    Category = "",
+    Metric   = "",
+    Value    = ""
+  ) %>% 
+  
+  # Header styling
+  bold(part = "header") %>%
+  
+  # Emphasize grouping
+  merge_v(j = "Category") %>%
+  bold(j = "Category", part = "body") %>%
+  
+  # Clean look
+  border_remove() %>%
+  fontsize(size = 11, part = "all") %>%
+  bg(bg = "white", part = "all") %>%
+  
+  # Optional subtle separators between groups
+  hline(i = c(3, 5), border = fp_border(color = "#cccccc")) %>%
+  
+  autofit()
+
+summary_all_ft
+```
+
+
+```{r second tab plot}
+
+complications_summary <- measles_data %>%
+  dplyr::select(starts_with("complications_")) %>%
+  summarise(
+    across(
+      everything(),
+      ~ sum(.x == TRUE, na.rm = TRUE)
+    )
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "complication",
+    values_to = "n"
+  )
+
+complications_plot <- ggplot(complications_summary %>% 
+                               filter(complication != "complications_none"),
+                             aes(x = complication, y = n)) +
+  geom_col() +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+complications_plot
+```
+

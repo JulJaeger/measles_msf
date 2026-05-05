@@ -1,0 +1,9 @@
+"0","epi_curve_interactive <- ggplotly(
+  epi_curve,
+  tooltip = ""text""
+) %>%
+  config(displayModeBar = FALSE)
+"
+"2","Error in as.data.frame.default(x[[i]], optional = TRUE) : 
+  cannot coerce class ‘structure(""standardGeneric"", package = ""methods"")’ to a data.frame
+"

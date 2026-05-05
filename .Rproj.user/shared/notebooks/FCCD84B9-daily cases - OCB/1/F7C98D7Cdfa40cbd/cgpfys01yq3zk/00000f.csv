@@ -1,0 +1,6 @@
+"0","pacman::p_load("
+"0","  rio, janitor, lubridate, skimr, epikit, gtsummary,"
+"0","  tidyverse, knitr, flextable, tibble, epitools,"
+"0","  readxl, sf, terra, ggspatial, ggplot2,"
+"0","  stringr, ggrepel, MASS, broom, openxlsx"
+"0",")"
