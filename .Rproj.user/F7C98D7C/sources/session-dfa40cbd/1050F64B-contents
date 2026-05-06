@@ -1,11 +1,9 @@
 ---
-
 title: "Measles Cases – Cox’s Bazaar"
 subtitle: "April – May 2026"
 date: "2026-05-05"
 output:
-  pdf_document:
-    latex_engine: xelate
+  html_document
 ---
 
 ```{r setup, include=FALSE}
@@ -24,12 +22,11 @@ pacman::p_load(
 
 ```{r import data}
 # case data
-measles_data_imp <- read.csv(here("data/measles_data.csv")
-)
+measles_data_imp <- read.csv(here("data/measles_data.csv"))
 
 measles_data <- measles_data_imp %>% 
   clean_names() %>% 
-  dplyr::select(-c(1:2, 6, 7, 9, 10, 18:20, 23, 25, 30, 32, 38, 40, 41, 42, 53, 58, 59, 69, 70, 73, 73,  90, 97:103)) %>% 
+  dplyr::select(-c(1:2, 6, 7, 9, 10, 18:20, 23, 25, 30, 32, 38, 40, 41, 42, 53, 58, 59, 70, 73, 73,  90, 97:103)) %>% 
   mutate(
     camp = if_else(
       camp == "other",
@@ -57,7 +54,11 @@ measles_data <- measles_data_imp %>%
   mutate(
     date_of_visit = as.Date(date_of_visit, format = "%d/%m/%Y")
   ) %>% 
-  mutate(block = stringr::str_to_sentence(block))
+  mutate(block = stringr::str_to_sentence(block)) %>% 
+  mutate(
+    pneumonia = final_diagnoses_severe_pneumonia %in% c("TRUE", "true") |
+                final_diagnoses_simple_pneumonia %in% c("TRUE", "true")
+  )
 
 #map data
 sub_blocks <- st_read(here("data/Block_Boundary_V1/Block_Boundary_V1.shp"), quiet = TRUE) %>% 
@@ -176,6 +177,320 @@ mam <- measles_data %>%
 total = n())
 ```
 
+### Indicator table
+
+```{r indicators}
+# Start and end date of surveillance and total days surveilled
+surv_start <- min(measles_data$date_of_visit, na.rm = TRUE)
+surv_end   <- max(measles_data$date_of_visit, na.rm = TRUE)
+surv_days  <- as.integer(difftime(surv_end, surv_start, units = "days")) + 1
+
+# total number of Cases 
+N_total <- nrow(measles_data)
+N_cases_u5 <- measles_data %>% 
+  filter(age_in_years <= 5) %>% 
+  nrow()
+# number of OPD cases(includes NAs)
+N_OPD <- measles_data %>%
+  filter(
+    does_this_patient_admitted_and %in% c("no", "n/a")
+  ) %>%
+  nrow()
+#number of IPD
+N_IPD <- measles_data %>%
+  filter(does_this_patient_admitted_and == "yes") %>%
+  nrow()
+
+#Number of discharged, LAMA as outcome (IPD)
+N_discharge <- sum(measles_data$outcome == "discharged", na.rm = TRUE)
+N_LAMA      <- sum(measles_data$outcome == "lama", na.rm = TRUE)
+
+
+pct_discharge <- round(N_discharge / N_total * 100, 1)
+pct_LAMA      <- round(N_LAMA / N_total * 100, 1)
+
+# camp of origin (all cases)
+N_JMS <- measles_data %>%
+  filter(phc == "new_jms") %>%
+  nrow()
+
+N_HMS <- measles_data %>%
+  filter(phc == "hms") %>%
+  nrow()
+O_JMS <- measles_data %>%
+  filter(phc == "old_jms") %>%
+  nrow()
+
+#Total Population (at risk) = FDMN All camp <5 year age
+pop_at_risk <- 184858
+
+# Overall Attack Rate (/1,000) 
+#1st calculate cases amongst population at risk (FDMN)
+N_total_fdmn <- measles_data %>%
+  filter(nationality == "fdmn") %>%
+  nrow()
+#2nd calculate attack rate
+attack_rate <- round(N_total_fdmn / pop_at_risk * 1000, 2)
+#Overall Incidence Rate (/10k/day)
+incidence_rate <- round(N_total_fdmn / pop_at_risk * 10000 / surv_days, 3)
+
+# Severe cases (N and %), 
+N_severe <- sum(measles_data$clinical_severity == "severe", na.rm = TRUE)
+severe_rate <- round(N_severe / N_total * 100, 2)
+
+# deaths and mortality rate (total and in under 5)
+N_deaths    <- sum(measles_data$outcome == "died", na.rm = TRUE)
+#Case fatality
+cfr <- round(N_deaths / N_total * 100, 2)
+deaths_u5 <- measles_data %>%
+  filter(outcome == "died", age_in_years < 5) %>%
+  nrow()
+cfr_u5 <- round(deaths_u5 / N_cases_u5 * 100, 2)
+
+#Vaccination 
+N_vaccinated <- sum(measles_data$did_the_patient_receive_measle == "yes", na.rm = TRUE)
+vacc_coverage <- round(N_vaccinated / N_total * 100, 1)
+
+#nationality of patients (N and %)
+fdmn <- sum(measles_data$nationality == "fdmn", na.rm = TRUE)
+host <- sum(measles_data$nationality == "host", na.rm = TRUE)
+
+fdmn_pct <- round(fdmn / N_total * 100, 1)
+host_pct <- round(host / N_total * 100, 1)
+
+#SAM and MAM in under 5 year olds 
+sam <- measles_data %>% 
+  filter(age_in_years < 5) %>% 
+  summarise(
+    final_diagnoses_severe_acute_malnutrition = sum (final_diagnoses_severe_acute_malnutrition == TRUE, na.rm = TRUE),
+total = n())
+
+mam <- measles_data %>% 
+  filter(age_in_years < 5) %>% 
+  summarise(
+    final_diagnoses_moderate_acute_malnutrition = sum (final_diagnoses_moderate_acute_malnutrition == TRUE, na.rm = TRUE),
+total = n())
+
+#age  (total)
+age_prop <- measles_data %>%
+  mutate(
+    age_group = case_when(
+      age_in_years < 1 ~ "<1 year",
+      age_in_years < 5 ~ "1–4 years",
+      age_in_years < 15 ~ "5–14 years",
+      TRUE ~ "15+ years"
+    )
+  ) %>%
+  count(age_group) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+age_text <- age_prop %>%
+  filter(age_group != "15+ years") %>%
+  mutate(txt = paste0(pct, "% are ", age_group)) %>%
+  pull(txt) %>%
+  paste(collapse = "; ")
+#age  (IPD)
+age_prop_ipd <- measles_data %>%
+  filter(does_this_patient_admitted_and == "yes") %>% 
+  mutate(
+    age_group = case_when(
+      age_in_years < 1 ~ "<1 year",
+      age_in_years < 5 ~ "1–4 years",
+      age_in_years < 15 ~ "5–14 years",
+      TRUE ~ "15+ years"
+    )
+  ) %>%
+  count(age_group) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+age_text_ipd <- age_prop_ipd %>%
+  filter(age_group != "15+ years") %>%
+  mutate(txt = paste0(pct, "% are ", age_group)) %>%
+  pull(txt) %>%
+  paste(collapse = "; ")
+
+
+#pneumonia amongst ipd 
+ipd <- measles_data %>% filter(does_this_patient_admitted_and == "yes")
+pneumonia_ipd <- sum(
+  ipd$pneumonia == TRUE,
+  na.rm = TRUE
+)
+pct_pneumonia_ipd <- round(pneumonia_ipd / N_IPD * 100, 1)
+
+#Complications in IPD
+complications_ipd <- ipd %>%
+  dplyr::select(starts_with("complications_")) %>%
+  mutate(across(
+    everything(),
+    ~ .x %in% c(TRUE, "TRUE", "true")
+  ))
+
+complication_prop <- complications_ipd %>%
+  summarise(across(everything(), ~ sum(.x, na.rm = TRUE))) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "complication",
+    values_to = "n"
+  ) %>%
+  mutate(
+    complication = str_remove(complication, "^complications_"),
+    pct = round(n / N_IPD * 100, 1)
+  )
+
+complication_text <- complication_prop %>%
+  mutate(
+    txt = paste0(
+      str_to_title(complication),
+      ": ",
+      pct,
+      "%"
+    )
+  ) %>%
+  pull(txt) %>%
+  paste(collapse = "; ")
+
+
+indicator_table <- tibble::tibble(
+  Indicator = c(
+    # Surveillance
+    "Surveillance Start",
+    "Surveillance End",
+    "Surveillance Days",
+
+    # Caseload
+    "Total Cases (N)",
+    "OPD Cases",
+    "IPD / Admitted Cases",
+
+    # Outcomes
+    "Number of Discharge (%)",
+    "Number of LAMA (%)",
+
+    # Case classification
+    "NEW JMS Cases",
+    "HMS Cases",
+    "OLD JMS Cases",
+
+    # FDMN Population & rates
+    "Population at risk (<5y)",
+    "Overall Attack Rate (per 1,000)",
+    "Overall Incidence Rate (per10k/day)",
+
+    # Severity & deaths
+    "Severe Cases (N)",
+    "Severe Rate (%)",
+    "Deaths (N)",
+    "Case Fatality Rate (%)",
+    "Deaths <5 years (N)",
+    "Case Fatality Rate <5 years (%)",
+
+    # Vaccination
+    "Vaccinated (N)",
+    "Vaccination Coverage (%)",
+
+    # Nationality
+    "FDMN (Rohingya)",
+    "Host (Bangladeshi)",
+
+    # Nutrition
+    "SAM cases <5y (MUAC <11.5)",
+    "MAM cases <5y (MUAC 11.5–12.4)",
+
+    # Age distribution
+    "Age distribution (all cases)",
+    "Age distribution (IPD only)",
+
+    # Pneumonia
+    "% pneumonia among IPD cases",
+    "Proportion of different complications in IPD"
+  ),
+
+  Result = c(
+    # Surveillance
+    format(surv_start, "%A, %B %d, %Y"),
+    format(surv_end, "%A, %B %d, %Y"),
+    surv_days,
+
+    # Caseload
+    N_total,
+    N_OPD,
+    N_IPD,
+
+    # Outcomes
+    paste0(N_discharge, " (", pct_discharge, "%)"),
+    paste0(N_LAMA, " (", pct_LAMA, "%)"),
+
+    # Case classification
+    N_JMS,
+    N_HMS,
+    O_JMS,
+
+    # Population & rates
+    pop_at_risk,
+    paste0(attack_rate, " / 1,000"),
+    paste0(incidence_rate, " / 10k/day"),
+
+    # Severity & deaths
+    N_severe,
+    paste0(severe_rate, "%"),
+    N_deaths,
+    paste0(cfr, "%"),
+    deaths_u5,
+    paste0(cfr_u5, "%"),
+
+    # Vaccination
+    N_vaccinated,
+    paste0(vacc_coverage, "%"),
+
+    # Nationality
+    paste0(fdmn, " (", fdmn_pct, "%)"),
+    paste0(host, " (", host_pct, "%)"),
+
+    # Nutrition
+    sam$final_diagnoses_severe_acute_malnutrition,
+    mam$final_diagnoses_moderate_acute_malnutrition,
+
+    # Age distribution
+    age_text,
+    age_text_ipd,
+
+    # Pneumonia
+    paste0(pct_pneumonia_ipd, "% (", pneumonia_ipd, " out of ", N_IPD, " IPD cases)"),
+    complication_text
+  )
+)
+
+indicator_ft <- flextable(indicator_table) %>%
+  
+  set_header_labels(
+    Indicator = "Indicators",
+    Result    = "Result"
+  ) %>%
+  
+  bold(part = "header") %>%
+  bold(j = "Indicator", part = "body") %>%
+  
+  flextable::align(j = "Indicator", align = "left") %>%
+  flextable::align(j = "Result", align = "left") %>%
+  
+  border_remove() %>%
+  
+  # Section separators (surveillance | caseload | rates | severity | vax | others)
+  hline(
+    i = c(3, 6, 8, 11, 14, 20, 22, 24),
+    border = fp_border(color = "black")
+  ) %>%
+  
+  fontsize(size = 11, part = "all") %>%
+  autofit()
+indicator_ft
+
+
+
+```
+
+complication_text 
+
+
 ### Epicurve  
 ```{r epicurve, results='asis'}
 epi_curve <- ggplot(
@@ -215,201 +530,5 @@ div(
   style = "display:flex; justify-content:center;",
   div(style = "width:900px;", epi_curve_interactive)
 )
-```
-### Geographical distribution of cases
-```{r first map, fig.show="hold", out.width="50%", fig.margin=FALSE}
-map_dots <- ggplot() +
-  geom_sf(
-    data = sub_blocks,
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries,
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points,
-    aes(color = clinical_severity),
-    size = 3,
-    alpha = 0.7
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(
-       color = "Clinical severity") +
-  theme(plot.title = element_text(face = "bold", size = 22),
-        plot.subtitle = element_text(size = 18),
-        axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
-        axis.text.y = element_text(angle = 45, hjust = 1, size = 14),
-        legend.title = element_text(face = "bold", size = 16),
-        legend.text = element_text(size = 14)) +
-  theme(
-  panel.border = element_blank(),
-  panel.background = element_blank(),
-  plot.background = element_blank()
-) %>% 
-theme(
-  plot.margin = margin(0, 0, 0, 0),
-  panel.spacing = unit(0, "pt"),
-  legend.margin = margin(0, 0, 0, 0)
-) %>% 
-  theme(legend.position = "bottom")
-
-print(map_dots)
-
-second_map_dots <- ggplot() +
-  geom_sf(
-    data = sub_blocks,
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries,
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points,
-    aes(color = phc),
-    size = 3,
-    alpha = 0.7
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(
-       color = "Place of Treatment") +
-  theme(plot.title = element_text(face = "bold", size = 22),
-        plot.subtitle = element_text(size = 18),
-        axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
-        axis.text.y = element_text(angle = 45, hjust = 1, size = 14),
-        legend.title = element_text(face = "bold", size = 14),
-        legend.text = element_text(size = 12)) +
-  theme(
-  panel.border = element_blank(),
-  panel.background = element_blank(),
-  plot.background = element_blank()
-) %>% 
-theme(
-  plot.margin = margin(0, 0, 0, 0),
-  panel.spacing = unit(0, "pt"),
-  legend.margin = margin(0, 0, 0, 0)
-) %>% 
-  theme(legend.position = "bottom")
-
-print(second_map_dots)
-```
-
-### Absolute number of cases until today
-```{r values 1}
-group_border <- fp_border(color = "black", width = 1)
-
-summary_wide <- tibble::tibble(
-  Metric = c("Total", "Weekly", "Yesterday"),
-  Total  = c(total_cases, weekly_cases, yesterdays_cases),
-  Severe = c(severe_cases, weekly_severe_cases, yesterdays_severe_cases),
-  Simple = c(simple_cases, weekly_simple_cases, yesterdays_simple_cases)
-)
-summary_wide  <- flextable(summary_wide)
-
-summary_wide
- 
-```
-```{r}
-summary_all <- tibble::tibble(
-  Category = c(
-    "Vaccination", "Vaccination", "Vaccination",
-    "Nutrition (SAM)", "Nutrition (SAM)",
-    "Nutrition (MAM)", "Nutrition (MAM)"
-  ),
-  Metric = c(
-    "Vaccinated",
-    "Total cases",
-    "Percent vaccinated (%)",
-    "SAM cases",
-    "Total cases",
-    "MAM cases",
-    "Total cases"
-  ),
-  Value = c(
-    vaccinated$vaccinated,
-    vaccinated$total,
-    round(vaccinated$percent_vaccinated, 1),
-    sam$final_diagnoses_severe_acute_malnutrition,
-    sam$total,
-    mam$final_diagnoses_moderate_acute_malnutrition,
-    mam$total
-  )
-)
-
-
-summary_all_ft <- flextable(summary_all) %>%
-  
-set_header_labels(
-    Category = "",
-    Metric   = "",
-    Value    = ""
-  ) %>% 
-  
-  # Header styling
-  bold(part = "header") %>%
-  
-  # Emphasize grouping
-  merge_v(j = "Category") %>%
-  bold(j = "Category", part = "body") %>%
-  
-  # Clean look
-  border_remove() %>%
-  fontsize(size = 11, part = "all") %>%
-  bg(bg = "white", part = "all") %>%
-  
-  # Optional subtle separators between groups
-  hline(i = c(3, 5), border = fp_border(color = "#cccccc")) %>%
-  
-  autofit()
-
-summary_all_ft
-```
-
-
-```{r second tab plot}
-
-complications_summary <- measles_data %>%
-  dplyr::select(starts_with("complications_")) %>%
-  summarise(
-    across(
-      everything(),
-      ~ sum(.x == TRUE, na.rm = TRUE)
-    )
-  ) %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "complication",
-    values_to = "n"
-  )
-
-complications_plot <- ggplot(complications_summary %>% 
-                               filter(complication != "complications_none"),
-                             aes(x = complication, y = n)) +
-  geom_col() +
-  theme_light() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-complications_plot
 ```
 
