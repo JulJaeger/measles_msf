@@ -473,12 +473,14 @@ age_prop <- measles_data %>%
   ) %>%
   count(age_group) %>%
   mutate(pct = round(n / sum(n) * 100, 1))
+
 age_text <- age_prop %>%
   filter(age_group != "15+ years") %>%
   mutate(txt = paste0(pct, "% are ", age_group)) %>%
   pull(txt) %>%
   paste(collapse = "; ")
 #age  (IPD)
+
 age_prop_ipd <- measles_data %>%
   filter(does_this_patient_admitted_and == "yes") %>% 
   mutate(
@@ -491,12 +493,12 @@ age_prop_ipd <- measles_data %>%
   ) %>%
   count(age_group) %>%
   mutate(pct = round(n / sum(n) * 100, 1))
+
 age_text_ipd <- age_prop_ipd %>%
   filter(age_group != "15+ years") %>%
   mutate(txt = paste0(pct, "% are ", age_group)) %>%
   pull(txt) %>%
   paste(collapse = "; ")
-
 
 #pneumonia amongst ipd 
 ipd <- measles_data %>% filter(does_this_patient_admitted_and == "yes")
@@ -947,7 +949,6 @@ complications_ipd <- ipd %>%
     everything(),
     ~ .x %in% c(TRUE, "TRUE", "true")
   ))
-
 
 any_complication_n <- ipd |>
   dplyr::select(
