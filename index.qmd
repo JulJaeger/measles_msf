@@ -418,7 +418,7 @@ O_JMS <- measles_data %>%
   nrow()
 
 #Total Population (at risk) = FDMN All camp <5 year age
-pop_at_risk <- 271565
+pop_at_risk <- 184858
 
 # Overall Attack Rate (/1,000) 
 #1st calculate cases amongst population at risk (FDMN)
