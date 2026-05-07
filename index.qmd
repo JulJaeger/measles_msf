@@ -59,6 +59,10 @@ measles_data <- measles_data_imp %>%
   ) %>% 
   mutate(block = stringr::str_to_sentence(block))
 
+measles_data <- measles_data %>% 
+  mutate(ipd_opd = case_when(patient_id == "n/a" ~ "OPD",
+                             TRUE ~ "IPD"))
+
 #map data
 sub_blocks <- st_read(here("data/Block_Boundary_V1/Block_Boundary_V1.shp"), quiet = TRUE) %>% 
   filter(!CampName_1 %in% c("Camp 21", "Camp 22", "Camp 24", "Camp 25", "Camp 26", "Camp 27", "Nayapara RC")) %>% 
@@ -114,12 +118,12 @@ total_cases <- nrow(measles_data)
 
 # Severe cases
 severe_cases <- measles_data %>%
-  filter(clinical_severity == "severe") %>%
+  filter(ipd_opd == "IPD") %>%
   nrow()
 
 # Simple cases
 simple_cases <- measles_data %>%
-  filter(clinical_severity == "simple") %>%
+  filter(ipd_opd == "OPD") %>%
   nrow()
 
 # Weekly cases (last 7 days)
@@ -130,13 +134,13 @@ weekly_cases <- measles_data %>%
 # Weekly severe cases
 weekly_severe_cases <- measles_data %>%
   filter(date_of_visit >= Sys.Date() - 7,
-         clinical_severity == "severe") %>%
+         ipd_opd == "IPD") %>%
   nrow()
 
 # Weekly simple cases
 weekly_simple_cases <- measles_data %>%
   filter(date_of_visit >= Sys.Date() - 7,
-         clinical_severity == "simple") %>%
+         ipd_opd == "OPD") %>%
   nrow()
 
 # Yesterday's cases
@@ -147,13 +151,13 @@ yesterdays_cases <- measles_data %>%
 # Yesterday's severe cases
 yesterdays_severe_cases <- measles_data %>%
   filter(date_of_visit == Sys.Date() - 1,
-         clinical_severity == "severe") %>%
+         ipd_opd == "IPD") %>%
   nrow()
 
 # Yesterday's simple cases
 yesterdays_simple_cases <- measles_data %>%
   filter(date_of_visit == Sys.Date() - 1,
-         clinical_severity == "simple") %>%
+         ipd_opd == "OPD") %>%
   nrow()
 ```
 
@@ -176,6 +180,18 @@ mam <- measles_data %>%
   summarise(
     final_diagnoses_moderate_acute_malnutrition = sum (final_diagnoses_moderate_acute_malnutrition == TRUE, na.rm = TRUE),
 total = n())
+
+N_OPD <- measles_data %>%
+  filter(
+    patient_id == "n/a"
+  ) %>%
+  nrow()
+#number of IPD
+N_IPD <- measles_data %>%
+  filter(patient_id != "n/a") %>%
+  nrow()
+
+
 ```
 
 
@@ -209,7 +225,7 @@ geom_sf(
   ) +
   geom_sf(
     data = cases_points,
-    aes(color = clinical_severity),
+    aes(color = ipd_opd),
     size = 3,
     alpha = 0.7
   ) +
@@ -305,11 +321,11 @@ div(
 div(
   style = "background-color:white; padding:0px; border-radius:0px; font-size:14px;",
   div(
-    span(strong("Severe Cases: "), severe_cases),
+    span(strong("IPD Cases: "), severe_cases),
     div(
-      span(strong("Weekly Severe Cases: "), weekly_severe_cases),
+      span(strong("Weekly IPD Cases: "), weekly_severe_cases),
       div(
-        span(strong("Yesterday's Severe Cases: "), yesterdays_severe_cases),
+        span(strong("Yesterday's IPD Cases: "), yesterdays_severe_cases),
         style = "border-bottom:1px solid black; padding-bottom:2px;"
       )
     )
@@ -321,11 +337,11 @@ div(
 div(
   style = "background-color:white; padding:0px; border-radius:0px; font-size:14px;",
   div(
-    span(strong("Simple Cases: "), simple_cases),
+    span(strong("OPD Cases: "), simple_cases),
     div(
-      span(strong("Weekly Simple Cases: "), weekly_simple_cases),
+      span(strong("Weekly OPD Cases: "), weekly_simple_cases),
       div(
-        span(strong("Yesterday's Simple Cases: "), yesterdays_simple_cases),
+        span(strong("Yesterday's OPD Cases: "), yesterdays_simple_cases),
         style = "border-bottom:1px solid black; padding-bottom:2px;"
       )
     )
@@ -339,7 +355,7 @@ div(
 #| padding: 0px
 epi_curve <- ggplot(
   epi_cases,
-  aes(x = date_of_visit, y = case_id, fill = clinical_severity, text = hover_text)
+  aes(x = date_of_visit, y = case_id, fill = ipd_opd, text = hover_text)
 ) +
   geom_tile(
     width = 0.9,
@@ -387,15 +403,6 @@ N_cases_u5 <- measles_data %>%
   filter(age_in_years <= 5) %>% 
   nrow()
 # number of OPD cases(includes NAs)
-N_OPD <- measles_data %>%
-  filter(
-    does_this_patient_admitted_and %in% c("no", "n/a")
-  ) %>%
-  nrow()
-#number of IPD
-N_IPD <- measles_data %>%
-  filter(does_this_patient_admitted_and == "yes") %>%
-  nrow()
 
 #Number of discharged, LAMA as outcome (IPD)
 N_discharge <- sum(measles_data$outcome == "discharged", na.rm = TRUE)

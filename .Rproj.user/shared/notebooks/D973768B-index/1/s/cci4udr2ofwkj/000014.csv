@@ -18,7 +18,7 @@
 "0","  ) +"
 "0","  geom_sf("
 "0","    data = cases_points,"
-"0","    aes(color = clinical_severity),"
+"0","    aes(color = ipd_opd),"
 "0","    size = 3,"
 "0","    alpha = 0.7"
 "0","  ) +"
