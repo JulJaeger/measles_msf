@@ -170,13 +170,13 @@ vaccinated <- measles_data %>%
   )
 
 sam <- measles_data %>% 
-  filter(age_in_years <= 5) %>% 
+  filter(age_in_years < 5) %>% 
   summarise(
     final_diagnoses_severe_acute_malnutrition = sum (final_diagnoses_severe_acute_malnutrition == "TRUE"),
 total = n())
 
 mam <- measles_data %>% 
-  filter(age_in_years <= 5) %>% 
+  filter(age_in_years < 5) %>% 
   summarise(
     final_diagnoses_moderate_acute_malnutrition = sum (final_diagnoses_moderate_acute_malnutrition == TRUE, na.rm = TRUE),
 total = n())
@@ -400,7 +400,7 @@ surv_days  <- as.integer(difftime(surv_end, surv_start, units = "days")) + 1
 # total number of Cases 
 N_total <- nrow(measles_data)
 N_cases_u5 <- measles_data %>% 
-  filter(age_in_years <= 5) %>% 
+  filter(age_in_years < 5) %>% 
   nrow()
 # number of OPD cases(includes NAs)
 
