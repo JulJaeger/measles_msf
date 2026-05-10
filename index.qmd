@@ -920,8 +920,7 @@ surveillance_gt
 ```
 
 
-
-```{r}
+```{r referral}
 #| title: "Isolation ward"
 #| fig.asp: 1
 #| out.width: 100%
@@ -1366,6 +1365,215 @@ age_gt <- age_section2_final %>%
 age_gt
 ```
 
+```{r referal from }
+#| title: "Referrals"
+#| fig.asp: 1
+#| out.width: 100%
+#| fig.align: center
+#| fig.margin: 0
+
+# -----------------------------------------------------
+# SECTION 7 — REFERRAL SOURCES FOR IPD
+# -----------------------------------------------------
+
+# 1. Define authoritative referral mapping
+referral_map <- c(
+  ocp_goyalmara  = "OCP Goyalmara",
+  ocp_hoh        = "OCP HoH",
+  other_facility = "Other facility",
+  brac           = "BRAC",
+  iom            = "IOM",
+  oca_ktp        = "OCA KTP",
+  "n/a"          = "Self-walk-in",
+  "n_a"          = "Self-walk-in"
+)
+
+referral_levels <- c(
+  "OCP Goyalmara",
+  "OCP HoH",
+  "Other facility",
+  "BRAC",
+  "IOM",
+  "OCA KTP",
+  "Self-walk-in"
+)
+
+# 2. Clean, recode, and summarise IPD referrals (FROM)
+referral_ipd <- measles_data %>%
+  filter(ipd_opd == "IPD") %>%
+  mutate(
+    referral_from   = tolower(trimws(referral_from)),
+    Referral_Source = referral_map[referral_from]
+  ) %>%
+  filter(!is.na(Referral_Source)) %>%
+  count(Referral_Source, name = "N_IPD") %>%
+  complete(
+    Referral_Source = referral_levels,
+    fill = list(N_IPD = 0)
+  ) %>%
+  mutate(
+    Denominator = sum(N_IPD),
+    `% of IPD`  = round(ifelse(Denominator > 0, N_IPD / Denominator * 100, 0), 2),
+    Referral_Source = factor(Referral_Source, levels = referral_levels)
+  ) %>%
+  arrange(Referral_Source)
+
+# -----------------------------------------------------
+# SECTION 8 — REFERRAL TO HIGHER-LEVEL CARE (FROM IPD)
+# -----------------------------------------------------
+
+referral_to_ipd <- measles_data %>%
+  filter(ipd_opd == "IPD") %>%
+  mutate(
+    referred_to = tolower(trimws(if_referred_where))
+  ) %>%
+  filter(!is.na(referred_to), referred_to != "") %>%
+  mutate(
+    Referred_To = case_when(
+      referred_to == "oca_ktp"       ~ "OCA KTP",
+      referred_to == "ocp_goyalmara" ~ "OCP Goyalmara",
+      TRUE                           ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(Referred_To)) %>%
+  count(Referred_To, name = "N") %>%
+  mutate(
+    Denominator = N_IPD,
+    `% of IPD`  = round(N / Denominator * 100, 2)
+  )
+
+total_referred_out <- referral_to_ipd %>%
+  summarise(
+    Referred_To = "Total referred out (any facility)",
+    N           = sum(N),
+    Denominator = N_IPD,
+    `% of IPD`  = round(N / Denominator * 100, 2)
+  )
+
+referral_to_final <- bind_rows(referral_to_ipd, total_referred_out)
+
+# -----------------------------------------------------
+# COMBINE WITH SUBHEADERS
+# -----------------------------------------------------
+
+from_header <- tibble(
+  Referral_Source = "REFERRALS FROM",
+  N_IPD = NA_real_,
+  Denominator = NA_real_,
+  `% of IPD` = NA_real_
+)
+
+to_header <- tibble(
+  Referral_Source = "REFERRALS TO",
+  N_IPD = NA_real_,
+  Denominator = NA_real_,
+  `% of IPD` = NA_real_
+)
+
+referral_from_table <- referral_ipd %>%
+  transmute(Referral_Source, N_IPD, Denominator, `% of IPD`)
+
+referral_to_table <- referral_to_final %>%
+  transmute(
+    Referral_Source = Referred_To,
+    N_IPD = N,
+    Denominator,
+    `% of IPD`
+  )
+
+referral_combined <- bind_rows(
+  from_header,
+  referral_from_table,
+  to_header,
+  referral_to_table
+)
+
+# -----------------------------------------------------
+# GT TABLE OUTPUT
+# -----------------------------------------------------
+
+referral_gt <- referral_combined %>%
+  gt() %>%
+
+  # ---- Title ----
+  tab_header(
+    title = md("**Referrals IPD**")
+  ) %>%
+
+  # ---- Column labels ----
+  cols_label(
+    Referral_Source = "Referral Source",
+    N_IPD           = "N referred",
+    Denominator     = "Total IPD",
+    `% of IPD`      = "% referred"
+  ) %>%
+
+  # ---- Alignment ----
+  cols_align(
+    align = "center",
+    columns = c(N_IPD, Denominator, `% of IPD`)
+  ) %>%
+  cols_align(
+    align = "left",
+    columns = Referral_Source
+  ) %>%
+
+  # ---- Typography ----
+  opt_table_font(
+    font = list(google_font("Roboto"), default_fonts())
+  ) %>%
+  opt_align_table_header(align = "left") %>%
+
+  # ---- Title bar ----
+  tab_style(
+    style = list(
+      cell_fill(color = "#008CBA"),
+      cell_text(color = "white", weight = "bold")
+    ),
+    locations = cells_title(groups = "title")
+  ) %>%
+
+  # ---- Column headers ----
+  tab_style(
+    style = cell_text(color = "#008CBA", weight = "bold"),
+    locations = cells_column_labels(everything())
+  ) %>%
+
+  # ---- Body text ----
+  tab_style(
+    style = cell_text(color = "black"),
+    locations = cells_body()
+  ) %>%
+
+  # ---- Subheaders (blue, bold) ----
+  tab_style(
+    style = cell_text(color = "#008CBA", weight = "bold"),
+    locations = cells_body(
+      rows = Referral_Source %in% c("REFERRALS FROM", "REFERRALS TO")
+    )
+  ) %>%
+
+  # ---- Hide NA values next to subheaders (version-safe) ----
+  tab_style(
+    style = cell_text(color = "transparent"),
+    locations = cells_body(
+      rows = Referral_Source %in% c("REFERRALS FROM", "REFERRALS TO"),
+      columns = c(N_IPD, Denominator, `% of IPD`)
+    )
+  ) %>%
+
+  # ---- Column widths ----
+  cols_width(
+    Referral_Source ~ px(260),
+    everything()    ~ px(120)
+  )
+
+# Print table
+referral_gt
+```
+
+
+
 ```{r third tab}
 #| title: "Patient Origin"
 #| fig.asp: 1
@@ -1508,29 +1716,27 @@ camp_gt
 #| fig.asp: 1
 #| out.width: 100%
 #| fig.align: center
-#| fig.margin: 0
+## Denominators#| fig.margin: 0
+# --------------------------------------------------
+
 N_IPD <- measles_data %>%
   filter(ipd_opd == "IPD") %>%
   nrow()
 
-N_all <- nrow(measles_data)
+N_all <- nrow(measles_data)   # ✅ ADD BACK: total cases
 
-N_complicated_ipd <- measles_data %>%
-  filter(
-    ipd_opd == "IPD",
-    clinical_severity == "severe"
-  ) %>%
-  nrow()
-
+# --------------------------------------------------
+# Long format final diagnoses (IPD only)
+# --------------------------------------------------
 
 final_dx_long <- measles_data %>%
   filter(ipd_opd == "IPD") %>%
   dplyr::select(
     starts_with("final_diagnoses_"),
-    -any_of("final_diagnoses_measles")   # ✅ safe whether it exists or not
+    -any_of("final_diagnoses_measles")
   ) %>%
   mutate(
-    across(everything(), ~ .x == "TRUE") # character → logical
+    across(everything(), ~ .x == "TRUE")
   ) %>%
   pivot_longer(
     cols = everything(),
@@ -1539,59 +1745,51 @@ final_dx_long <- measles_data %>%
   ) %>%
   filter(Present)
 
+# --------------------------------------------------
+# Co-diagnosis counts
+# --------------------------------------------------
 
-co_dx_table <- final_dx_long %>%
+co_dx_final <- final_dx_long %>%
   count(Diagnosis, name = "Numerator") %>%
   mutate(
-    `Denominator (IPD)`        = N_IPD,
-    `% of IPD Admissions`      = round(Numerator / N_IPD * 100, 2),
-    `% of All Cases`           = round(Numerator / N_all * 100, 2)
-  )
-
-co_dx_complicated <- final_dx_long %>%
-  inner_join(
-    measles_data %>%
-      filter(ipd_opd == "IPD", clinical_severity == "severe") %>%
-      mutate(id = row_number()) %>%
-      dplyr::select(id),
-    by = character()
-  ) %>%
-  count(Diagnosis, name = "Complicated_N") %>%
-  mutate(
-    `% of Complicated IPD` =
-      round(Complicated_N / N_complicated_ipd * 100, 2)
-  )
-
-co_dx_final <- co_dx_table %>%
-  left_join(co_dx_complicated, by = "Diagnosis") %>%
-  mutate(
+    `Denominator (IPD)`   = N_IPD,
+    `% of IPD Admissions` = round(Numerator / N_IPD * 100, 2),
+    `% of All Cases`      = round(Numerator / N_all * 100, 2),  # ✅ RESTORED
     Diagnosis = gsub("final_diagnoses_", "+ ", Diagnosis),
     Diagnosis = gsub("_", " ", Diagnosis),
     Diagnosis = tools::toTitleCase(Diagnosis)
   ) %>%
   arrange(desc(Numerator))
 
-
-library(gt)
+# --------------------------------------------------
+# GT table
+# --------------------------------------------------
 
 co_dx_gt <- co_dx_final %>%
   gt() %>%
 
   tab_header(
-    title = md("**Co-Diagnoses IPD patients**")
+    title = md("**Co‑Diagnoses (IPD Patients)**")
   ) %>%
 
   cols_label(
-    Diagnosis               = "Co-Diagnosis",
-    Numerator               = "N (IPD)",
-    `Denominator (IPD)`     = "Total IPD",
-    `% of IPD Admissions`   = "% of IPD",
-    `% of All Cases`        = "% of All Cases",
-    `% of Complicated IPD`  = "% of Complicated IPD"
+    Diagnosis             = "Co‑Diagnosis",
+    Numerator             = "N (IPD)",
+    `Denominator (IPD)`   = "Total IPD",
+    `% of IPD Admissions` = "% of IPD",
+    `% of All Cases`      = "% of All Cases"   # ✅ RESTORED
   ) %>%
 
-  cols_align(align = "center", columns = -Diagnosis) %>%
-  cols_align(align = "left", columns = Diagnosis) %>%
+  cols_align(align = "left", columns = "Diagnosis") %>%
+  cols_align(
+    align = "center",
+    columns = c(
+      "Numerator",
+      "Denominator (IPD)",
+      "% of IPD Admissions",
+      "% of All Cases"
+    )
+  ) %>%
 
   opt_table_font(
     font = list(google_font("Roboto"), default_fonts())
@@ -1610,7 +1808,7 @@ co_dx_gt <- co_dx_final %>%
   # Column headers
   tab_style(
     style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels(everything())
+    locations = cells_column_labels()
   ) %>%
 
   # Body text
@@ -1625,6 +1823,11 @@ co_dx_gt <- co_dx_final %>%
   )
 
 co_dx_gt
+
+library(dplyr)
+library(gt)
+
+# --------------------------------------------------
 
 ```
 
