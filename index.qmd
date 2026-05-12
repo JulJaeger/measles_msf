@@ -29,7 +29,7 @@ measles_data_imp <- read.csv(here("data/measles_data.csv")
 
 measles_data <- measles_data_imp %>% 
   clean_names() %>% 
-  dplyr::select(-c(1:2, 6, 7, 9, 10, 18:20, 23, 25, 30, 32, 38, 40, 41, 42, 53, 58, 59, 69, 70, 73, 73,  90, 98:103)) %>% 
+  dplyr::select(-c(1:2, 6, 7, 9, 10, 18:20, 23, 25, 30, 32, 38, 40, 41, 42, 53, 58, 59, 69, 70, 73, 73,  90, 98, 101:103)) %>% 
   mutate(
     camp = if_else(
       camp == "other",
