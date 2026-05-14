@@ -267,6 +267,42 @@ geom_sf(
     plot.margin = margin(0, 0, 0, 0)
   )
 
+map_1 <- ggplot() +
+  geom_sf(
+    data = sub_blocks %>% filter(CampName_1 %in% group_1),
+    fill = "white", color = "grey80", linewidth = 0.1
+  ) +
+  geom_sf(
+    data = camp_boundaries %>% filter(CampName_1 %in% group_1),
+    fill = NA, color = "black", linewidth = 0.7
+  ) +
+  geom_sf(
+    data = cases_points %>% filter(camp %in% group_1),
+    aes(color = ipd_opd), size = 3, alpha = 0.7
+  ) +
+  # Add camp labels (numbers only)
+  geom_sf_text(
+    data = camp_boundaries %>% filter(CampName_1 %in% group_1,
+                                      CampName_1 != "Kutupalong RC") %>%
+      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
+    aes(label = CampLabel),
+    size = 5, fontface = "bold"
+  ) +
+  coord_sf(expand = FALSE) +
+  theme_light() +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    legend.position = "none",
+    panel.grid = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    plot.margin = margin(0, 0, 0, 0)
+  ) +
+  labs(color = "Clinical severity")
+
 map_2 <- ggplot() +
   geom_sf(
     data = sub_blocks %>% filter(CampName_1 %in% group_2),
@@ -285,6 +321,14 @@ geom_sf(
     aes(color = ipd_opd),
     size = 3,
     alpha = 0.7
+  ) +
+   # Add camp labels (numbers only)
+  geom_sf_text(
+    data = camp_boundaries %>% filter(CampName_1 %in% group_2,
+                                      CampName_1 != "Nayapara RC") %>%
+      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
+    aes(label = CampLabel),
+    size = 5, fontface = "bold"
   ) +
   coord_sf(expand = FALSE) +
   theme_light() +
@@ -306,6 +350,8 @@ geom_sf(
     plot.background = element_blank(),
     plot.margin = margin(0, 0, 0, 0)
   )
+
+
 
 map_3 <- ggplot() +
   geom_sf(
@@ -473,6 +519,13 @@ geom_sf(
     size = 3,
     alpha = 0.7
   ) +
+  geom_sf_text(
+    data = camp_boundaries %>% filter(CampName_1 %in% group_1,
+                                      CampName_1 != "Kutupalong RC") %>%
+      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
+    aes(label = CampLabel),
+    size = 5, fontface = "bold"
+  ) +
   coord_sf(expand = FALSE) +
   theme_light() +
   theme(
@@ -512,6 +565,13 @@ geom_sf(
     aes(color = phc),
     size = 3,
     alpha = 0.7
+  ) +
+  geom_sf_text(
+    data = camp_boundaries %>% filter(CampName_1 %in% group_2,
+                                      CampName_1 != "Nayapara RC") %>%
+      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
+    aes(label = CampLabel),
+    size = 5, fontface = "bold"
   ) +
   coord_sf(expand = FALSE) +
   theme_light() +
