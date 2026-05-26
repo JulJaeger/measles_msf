@@ -787,62 +787,48 @@ div(
 
 epi_cases_weekly <- epi_cases %>%
   mutate(
-    iso_week = isoweek(date_of_visit),
-    iso_year = isoyear(date_of_visit),
-    week_label = paste0("Week ", iso_week)   # build "Week 14", "Week 15", etc.
+    # collapse dates into weeks starting on Sunday
+    week_start = floor_date(date_of_visit, unit = "week", week_start = 7),
+    # label directly from the Sunday date
+    week_label = paste0("Wk of ", format(week_start, "%d %b"))
   ) %>%
-  group_by(iso_year, iso_week, week_label, ipd_opd) %>%
+  group_by(week_start, week_label, ipd_opd) %>%
   summarise(
-    cases = n(),
-    .groups = "drop"
-  )
-
-epi_cases_weekly <- epi_cases %>%
-  mutate(
-    iso_week = isoweek(date_of_visit),
-    iso_year = isoyear(date_of_visit),
-    week_label = paste0("Week ", iso_week)
-  ) %>%
-  group_by(iso_year, iso_week, week_label, ipd_opd) %>%
-  summarise(
-    cases = n(),
+    cases   = n(),
     min_age = min(age_in_years, na.rm = TRUE),
     max_age = max(age_in_years, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(
     age_range = paste0(min_age, "-", max_age, " years"),
-    hover_text = paste(ipd_opd, "cases:", cases, "<br>Age:", age_range)
+    hover_text = paste0(ipd_opd, " cases: ", cases,
+                        "<br>Age range: ", age_range)
   )
 
-# Plot with custom tooltip
 epi_curve <- ggplot(
   epi_cases_weekly,
-  aes(x = week_label, y = cases, fill = ipd_opd, text = hover_text)
+  aes(x = factor(week_label, levels = unique(week_label)),
+      y = cases, fill = ipd_opd, text = hover_text)
 ) +
-  geom_col(position = "stack", color = "black") +
+  geom_col(position = "stack", color = "black", size = 0.1) +
   labs(
-    title = "Epidemic curve – measles",
-    subtitle = "Weekly aggregated cases",
+    title = "Weekly aggregated cases (Sunday–Saturday)",
     x = NULL,
     y = "Cases",
-    fill = "Clinical severity"
+    fill = "Clinical Severity"
   ) +
   theme_minimal() +
   theme(
-    plot.title = element_text(face = "bold"),
+    plot.title  = element_text(face = "bold"),
     axis.text.x = element_text(angle = 45, hjust = 1),
     plot.margin = margin(5, 5, 5, 5)
   )
 
-epi_curve_interactive <- ggplotly(
-  epi_curve,
-  tooltip = "text"
-) %>%
+epi_curve_interactive <- ggplotly(epi_curve, tooltip = "text") %>%
+  style(line = list(width = 0.1)) %>%   # set border width in Plotly
   config(displayModeBar = FALSE)
 
 epi_curve_interactive
-
 
 ```
 
