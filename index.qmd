@@ -812,7 +812,7 @@ epi_cases_weekly <- epi_cases %>%
   ) %>%
   mutate(
     age_range = paste0(min_age, "-", max_age, " years"),
-    hover_text = paste(ipd_opd, "=", cases, "<br>Age range:", age_range)
+    hover_text = paste(ipd_opd, "cases:", cases, "<br>Age:", age_range)
   )
 
 # Plot with custom tooltip
