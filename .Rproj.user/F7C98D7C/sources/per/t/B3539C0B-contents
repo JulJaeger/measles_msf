@@ -1401,7 +1401,7 @@ indicator_tbl <- tibble::tibble(
   Indicator = c(
     "Total admissions (IPD)",
     "— From referral (facility)",
-    "— Own catchment (self/walk-in)",
+    "— Own catchment",
     "% Children <5 years",
     "% Unvaccinated",
     "% With pneumonia (any)",
@@ -1830,8 +1830,8 @@ referral_map <- c(
   brac           = "BRAC",
   iom            = "IOM",
   oca_ktp        = "OCA KTP",
-  "n/a"          = "Self-walk-in",
-  "n_a"          = "Self-walk-in"
+  "n/a"          = "NJMS/HMS",
+  "n_a"          = "NJMS/HMS"
 )
 
 referral_levels <- c(
@@ -1841,7 +1841,7 @@ referral_levels <- c(
   "BRAC",
   "IOM",
   "OCA KTP",
-  "Self-walk-in"
+  "NJMS/HMS"
 )
 
 # 2. Clean, recode, and summarise IPD referrals (FROM)
