@@ -109,8 +109,6 @@ epi_cases <- measles_data %>%
     )
   ) %>%
   ungroup()
-
-plot(sub_blocks)
 ```
 
 ```{r calculate numbers}
