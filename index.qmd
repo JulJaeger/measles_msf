@@ -12,7 +12,9 @@ format:
 
 ```{r load packages}
 #| message: false
-# Load packages 
+# =========================
+# LOAD PACKAGES
+# =========================
 pacman::p_load(
   rio, janitor, lubridate, skimr, epikit, gtsummary, here,
   tidyverse, knitr, flextable, tibble, epitools, readxl, sf,
@@ -23,420 +25,308 @@ pacman::p_load(
 ```
 
 ```{r import data}
-measles_data_imp <- read.csv(here("data/measles_data.csv")
-)
+# =========================
+# IMPORT DATA
+# =========================
+measles_data <- read.csv(here("data/measles_data.csv")) %>%
+  clean_names() %>%
 
-measles_data <- measles_data_imp %>% 
-  clean_names() %>% 
-  dplyr::select(-c(1:2, 6, 7, 9, 10, 18:20, 23, 25, 30, 32, 38, 40, 41, 42, 53, 58, 59, 69, 70, 73, 73,  90, 98, 101:103)) %>% 
+  # -------------------------
+  # REMOVE UNUSED COLUMNS
+  # -------------------------
+  dplyr::select(-c(1:2, 6, 7, 9, 10, 18:20, 23, 25, 30, 32, 38, 40, 41, 42,
+            53, 58, 59, 69, 70, 73, 90, 98, 101:103)) %>%
+
+  # -------------------------
+  # CLEAN VARIABLES (ALL IN ONE MUTATE)
+  # -------------------------
   mutate(
-    camp = if_else(
-      camp == "other",
-      specify_other_camp,
-      camp
-    )
-  ) %>% 
-  dplyr::select(-specify_other_camp) %>% 
-  mutate(
-    block = str_remove(block, "^block_"),
-    camp = str_replace(camp, "^camp_", "Camp ")
-  ) %>% 
-  mutate(
-    camp = if_else(
-      camp == "KTP Register Camp", "Kutupalong RC",
-      camp
-    )
-  ) %>% 
-  mutate(
+    # --- camp cleaning ---
+    camp = case_when(
+      camp == "other" ~ specify_other_camp,
+      camp == "KTP Register Camp" ~ "Kutupalong RC",
+      TRUE ~ str_replace(camp, "^camp_", "Camp ")
+    ),
+
+    # unify camp naming
     camp = case_when(
       camp %in% c("Camp 1", "Camp 8") ~ paste0(camp, "E"),
       TRUE ~ camp
-    )
-  ) %>% 
-  mutate(
-    date_of_visit = as.Date(date_of_visit, format = "%d/%m/%Y")
-  ) %>% 
-  mutate(block = stringr::str_to_sentence(block))
+    ),
 
-measles_data <- measles_data %>% 
-  mutate(ipd_opd = case_when(patient_id == "n/a" ~ "OPD",
-                             TRUE ~ "IPD"))
+    # --- block formatting ---
+    block = block %>%
+      str_remove("^block_") %>%
+      str_to_sentence(),
 
-#map data
-sub_blocks <- st_read(here("data/Block_Boundary_V1/Block_Boundary_V1.shp"), quiet = TRUE) %>% 
+    # --- date ---
+    date_of_visit = as.Date(date_of_visit, "%d/%m/%Y"),
+
+    # --- IPD / OPD classification ---
+    ipd_opd = if_else(patient_id == "n/a", "OPD", "IPD")
+  ) %>%
+
+  # remove helper column AFTER use
+  dplyr::select(-specify_other_camp)
+
+# =========================
+# SPATIAL DATA
+# =========================
+sub_blocks <- st_read(
+  here("data/Block_Boundary_V1/Block_Boundary_V1.shp"),
+  quiet = TRUE
+) %>%
   mutate(CampName_1 = str_remove(CampName_1, " Extension$"))
 
-#merge datasets
+# -------------------------
+# MERGE CASES TO SHAPEFILE
+# -------------------------
 cases_sf <- measles_data %>%
   left_join(
     sub_blocks,
     by = c("camp" = "CampName_1",
-           "block" = "BlockLabel"
-           )
+           "block" = "BlockLabel")
   ) %>%
-  st_as_sf() %>% 
-  filter(is.na(patient_id)| patient_id == ("n/a") | !duplicated(patient_id))
+  st_as_sf() %>%
+  filter(
+    is.na(patient_id) |
+      patient_id == "n/a" |
+      !duplicated(patient_id)
+  )
 
-# points for map
+# -------------------------
+# RANDOM POINT WITHIN BLOCK
+# -------------------------
 cases_points <- cases_sf %>%
-  filter(!is.na(District)) %>% 
+  filter(!is.na(District)) %>%
   mutate(
-    geometry = map(
-      geometry,
-      ~ st_sample(.x, size = 1) %>% st_cast("POINT")
-    )
+    geometry = map(geometry,
+                   ~ st_sample(.x, 1) %>% st_cast("POINT"))
   ) %>%
   unnest(geometry) %>%
   st_as_sf() %>%
   st_set_crs(st_crs(sub_blocks))
 
+# -------------------------
+# CAMP BOUNDARIES (AGGREGATED)
+# -------------------------
 camp_boundaries <- sub_blocks %>%
   group_by(CampName_1) %>%
   summarise(
-    geometry = sf::st_union(geometry),
+    geometry = st_union(geometry),
     .groups = "drop"
   )
 
+# =========================
+# EPICURVE BASE DATA
+# =========================
 epi_cases <- measles_data %>%
-  filter(!is.na(date_of_visit)) %>% 
+  filter(!is.na(date_of_visit)) %>%
   arrange(date_of_visit) %>%
   group_by(date_of_visit) %>%
   mutate(
     case_id = row_number(),
+
+    # tooltip for plots
     hover_text = paste0(
       "Sex: ", gender, "<br>",
-      "Age: ", age_in_years, " years<br>"
+      "Age: ", age_in_years, " years"
     )
   ) %>%
   ungroup()
 ```
+```{r}
+# =========================
+# CALCULATE NUMBERS
+# =========================
 
-```{r calculate numbers}
-# Total cases
+# Total
 total_cases <- nrow(measles_data)
 
-# Severe cases
-severe_cases <- measles_data %>%
-  filter(ipd_opd == "IPD") %>%
-  nrow()
+# IPD / OPD
+severe_cases <- sum(measles_data$ipd_opd == "IPD", na.rm = TRUE)
+simple_cases <- sum(measles_data$ipd_opd == "OPD", na.rm = TRUE)
 
-# Simple cases
-simple_cases <- measles_data %>%
-  filter(ipd_opd == "OPD") %>%
-  nrow()
+# Last 7 days
+weekly_cases <- sum(
+  measles_data$date_of_visit >= Sys.Date() - 7,
+  na.rm = TRUE
+)
 
-# Weekly cases (last 7 days)
-weekly_cases <- measles_data %>%
-  filter(date_of_visit >= Sys.Date() - 7) %>%
-  nrow()
+weekly_severe_cases <- sum(
+  measles_data$date_of_visit >= Sys.Date() - 7 &
+  measles_data$ipd_opd == "IPD",
+  na.rm = TRUE
+)
 
-# Weekly severe cases
-weekly_severe_cases <- measles_data %>%
-  filter(date_of_visit >= Sys.Date() - 7,
-         ipd_opd == "IPD") %>%
-  nrow()
+weekly_simple_cases <- sum(
+  measles_data$date_of_visit >= Sys.Date() - 7 &
+  measles_data$ipd_opd == "OPD",
+  na.rm = TRUE
+)
 
-# Weekly simple cases
-weekly_simple_cases <- measles_data %>%
-  filter(date_of_visit >= Sys.Date() - 7,
-         ipd_opd == "OPD") %>%
-  nrow()
+# Yesterday
+yesterdays_cases <- sum(
+  measles_data$date_of_visit == Sys.Date() - 1,
+  na.rm = TRUE
+)
 
-# Yesterday's cases
-yesterdays_cases <- measles_data %>%
-  filter(date_of_visit == Sys.Date() - 1) %>%
-  nrow()
+yesterdays_severe_cases <- sum(
+  measles_data$date_of_visit == Sys.Date() - 1 &
+  measles_data$ipd_opd == "IPD",
+  na.rm = TRUE
+)
 
-# Yesterday's severe cases
-yesterdays_severe_cases <- measles_data %>%
-  filter(date_of_visit == Sys.Date() - 1,
-         ipd_opd == "IPD") %>%
-  nrow()
-
-# Yesterday's simple cases
-yesterdays_simple_cases <- measles_data %>%
-  filter(date_of_visit == Sys.Date() - 1,
-         ipd_opd == "OPD") %>%
-  nrow()
+yesterdays_simple_cases <- sum(
+  measles_data$date_of_visit == Sys.Date() - 1 &
+  measles_data$ipd_opd == "OPD",
+  na.rm = TRUE
+)
 ```
 
+
 ```{r}
-vaccinated <- measles_data %>% 
+# =========================
+# VACCINATION + NUTRITION
+# =========================
+
+vaccination_summary <- measles_data %>%
   summarise(
-    vaccinated = sum(did_the_patient_receive_measle == "Yes", na.rm = TRUE),
+    vaccinated = sum(did_the_patient_receive_measle %in% c("Yes","yes"), na.rm = TRUE),
     total = n(),
     percent_vaccinated = vaccinated / total * 100
   )
 
-sam <- measles_data %>% 
-  filter(age_in_years < 5) %>% 
+nutrition_u5 <- measles_data %>%
+  filter(age_in_years < 5) %>%
   summarise(
-    final_diagnoses_severe_acute_malnutrition = sum (final_diagnoses_severe_acute_malnutrition == "TRUE"),
-total = n())
+    SAM = sum(final_diagnoses_severe_acute_malnutrition %in% c(TRUE, "TRUE"), na.rm = TRUE),
+    MAM = sum(final_diagnoses_moderate_acute_malnutrition %in% c(TRUE, "TRUE"), na.rm = TRUE),
+    total = n()
+  )
 
-mam <- measles_data %>% 
-  filter(age_in_years < 5) %>% 
-  summarise(
-    final_diagnoses_moderate_acute_malnutrition = sum (final_diagnoses_moderate_acute_malnutrition == TRUE, na.rm = TRUE),
-total = n())
+# =========================
+# IPD / OPD TOTALS
+# =========================
 
-N_OPD <- measles_data %>%
-  filter(
-    patient_id == "n/a"
-  ) %>%
-  nrow()
-#number of IPD
-N_IPD <- measles_data %>%
-  filter(patient_id != "n/a") %>%
-  nrow()
+N_OPD <- sum(measles_data$ipd_opd == "OPD", na.rm = TRUE)
+N_IPD <- sum(measles_data$ipd_opd == "IPD", na.rm = TRUE)
 
 ```
 
 ```{r define camp groupings}
-# Group 1: Camp 01E–20 + Kutupalong RC
-group_1 <- c(
-  paste0("Camp ", (3:20)),  # Camp 02–Camp 20
-  "Camp 1E",
-  "Camp 2W",
-  "Camp 2E",
-  "Camp 1W",
-  "Camp 8E",
-  "Camp 8W",
-  "Kutupalong RC",
-  "Camp 15"
+# =========================
+# CAMP GROUPS (FOR MAPS)
+# =========================
+
+camp_groups <- list(
+
+  group_1 = c(
+    paste0("Camp ", 3:20),
+    "Camp 1E", "Camp 1W",
+    "Camp 2E", "Camp 2W",
+    "Camp 8E", "Camp 8W",
+    "Kutupalong RC"
+  ),
+
+  group_2 = c(
+    "Camp 24", "Camp 25", "Camp 26", "Camp 27",
+    "Nayapara RC"
+  ),
+
+  group_3 = "Camp 22",
+
+  group_4 = "Camp 21"
 )
-
-# Group 2: Camps 24–27 + Nayapara RC
-group_2 <- c(
-  "Camp 24",
-  "Camp 25",
-  "Camp 26",
-  "Camp 27",
-  "Nayapara RC"
-)
-
-# Group 3: Camp 22
-group_3 <- c("Camp 22")
-
-# Group 4: Camp 21
-group_4 <- c("Camp 21")
-
-
 ```
 
 
 ```{r maps severity}
-map_1 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_1),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_1),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_1),
-    aes(color = ipd_opd),
-    size = 3,
-    alpha = 0.7
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(
-       color = "Clinical severity") +
-  theme(
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
+make_map <- function(group, color_var, label_exclude = NULL, title = NULL) {
 
-map_1 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_1),
-    fill = "white", color = "grey80", linewidth = 0.1
-  ) +
-  geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_1),
-    fill = NA, color = "black", linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_1),
-    aes(color = ipd_opd), size = 3, alpha = 0.7
-  ) +
-  # Add camp labels (numbers only)
-  geom_sf_text(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_1,
-                                      CampName_1 != "Kutupalong RC") %>%
-      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
-    aes(label = CampLabel),
-    size = 5, fontface = "bold"
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  ) +
-  labs(color = "Clinical severity")
+  ggplot() +
 
-map_2 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_2),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_2),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_2),
-    aes(color = ipd_opd),
-    size = 3,
-    alpha = 0.7
-  ) +
-   # Add camp labels (numbers only)
-  geom_sf_text(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_2,
-                                      CampName_1 != "Nayapara RC") %>%
-      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
-    aes(label = CampLabel),
-    size = 5, fontface = "bold"
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(
-       color = "Clinical severity") +
-  theme(
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
+    # -------------------------
+    # SUB-BLOCK BACKGROUND
+    # -------------------------
+    geom_sf(
+      data = sub_blocks %>%
+        dplyr::filter(CampName_1 %in% group),
+      fill = "white",
+      color = "grey80",
+      linewidth = 0.1
+    ) +
+
+    # -------------------------
+    # CAMP BOUNDARIES
+    # -------------------------
+    geom_sf(
+      data = camp_boundaries %>%
+        dplyr::filter(CampName_1 %in% group),
+      fill = NA,
+      color = "black",
+      linewidth = 0.7
+    ) +
+
+    # -------------------------
+    # CASE POINTS
+    # -------------------------
+    geom_sf(
+      data = cases_points %>%
+        dplyr::filter(camp %in% group),
+      aes(color = {{ color_var }}),
+      size = 3,
+      alpha = 0.7
+    ) +
+
+    # -------------------------
+    # OPTIONAL LABELS (safe)
+    # -------------------------
+    geom_sf_text(
+      data = camp_boundaries %>%
+        dplyr::filter(
+          CampName_1 %in% group,
+          !CampName_1 %in% dplyr::coalesce(label_exclude, "")
+        ) %>%
+        dplyr::mutate(label = gsub("Camp ", "", CampName_1)),
+      aes(label = label),
+      size = 5,
+      fontface = "bold"
+    ) +
+
+    # -------------------------
+    # LAYOUT + THEMES
+    # -------------------------
+    coord_sf(expand = FALSE) +
+
+    labs(
+      color = rlang::as_label(rlang::enquo(color_var)),  # dynamic legend title
+      title = title
+    ) +
+
+    theme_light() +
+
+    theme(
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      axis.title = element_blank(),
+      legend.position = "none",
+      panel.grid = element_blank(),
+      panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
+      plot.margin = margin(0, 0, 0, 0)
+    )
+}
 
 
+# =========================
+# MAPS — CLINICAL SEVERITY
+# =========================
 
-map_3 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_3),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_3),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_3),
-    aes(color = ipd_opd),
-    size = 3,
-    alpha = 0.7
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(title = "Camp 22",
-       color = "Clinical severity") +
-  theme(
-    plot.title = element_text(face = "bold"),
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
+map_1 <- make_map(camp_groups$group_1, ipd_opd, "Kutupalong RC")
+map_2 <- make_map(camp_groups$group_2, ipd_opd, "Nayapara RC")
+map_3 <- make_map(camp_groups$group_3, ipd_opd, title = "Camp 22")
+map_4 <- make_map(camp_groups$group_4, ipd_opd, title = "Camp 21")
 
-map_4 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_4),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_4),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_4),
-    aes(color = ipd_opd),
-    size = 3,
-    alpha = 0.7
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(title = "Camp 21",
-       color = "Clinical severity") +
-  theme(
-    plot.title = element_text(face = "bold"),
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
-
-```
-
-```         
 ```
 
 # Overview 
@@ -449,45 +339,71 @@ geom_sf(
 #| out.width: 100%
 #| fig.align: center
 #| fig.margin: 0
-# Remove margins and borders from maps
-map_1 <- map_1 + theme(plot.margin = margin(0,0,0,0),
-                       panel.border = element_blank())
-map_2 <- map_2 + theme(plot.margin = margin(0,0,0,0),
-                       panel.border = element_blank())
-map_3 <- map_3 + theme(plot.margin = margin(0,0,0,0))
-map_4 <- map_4 + theme(plot.margin = margin(0,0,0,0))
 
-# Extract legend once
-legend <- cowplot::get_legend(
-  map_1 + theme(legend.position = "bottom",
-                legend.title = element_text(face = "bold", size = 18),
-                legend.text  = element_text(size = 16))
+# -------------------------
+# APPLY FINAL STYLING (once)
+# -------------------------
+trim_map <- function(p) {
+  p + theme(
+    plot.margin = margin(0,0,0,0),
+    panel.border = element_blank()
+  )
+}
+
+maps <- list(
+  m1 = trim_map(map_1),
+  m2 = trim_map(map_2),
+  m3 = trim_map(map_3),
+  m4 = trim_map(map_4)
 )
 
-# Build inset composites
-map1_with_inset <- cowplot::ggdraw() +
-  cowplot::draw_plot(map_1, -0.1, 0, 1, 1) +
-  cowplot::draw_plot(map_3, 0.5, 0.02, 0.3, 0.3)
+# -------------------------
+# LEGEND
+# -------------------------
+legend <- cowplot::get_legend(
+  maps$m1 +
+    theme(
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold", size = 18),
+      legend.text  = element_text(size = 16)
+    )
+)
 
-map2_with_inset <- cowplot::ggdraw() +
-  cowplot::draw_plot(map_2, 0, 0, 1, 1) +
-  cowplot::draw_plot(map_4, -0.2, -0.08, 0.5, 0.5)
+# -------------------------
+# INSET FUNCTION
+# -------------------------
+add_inset <- function(main_map, inset_map, x, y, w, h) {
+  cowplot::ggdraw() +
+    cowplot::draw_plot(main_map, -0.1, 0, 1, 1) +
+    cowplot::draw_plot(inset_map, x, y, w, h)
+}
 
-# Create a vertical divider line grob
-divider <- grid::linesGrob(x = unit(c(0.5, 0.5), "npc"),
-                           y = unit(c(0, 1), "npc"),
-                           gp = grid::gpar(col = "black", lwd = 1))
+# Build inset compositions
+map1_with_inset <- add_inset(maps$m1, maps$m3, 0.5, 0.02, 0.3, 0.3)
+map2_with_inset <- add_inset(maps$m2, maps$m4, -0.2, -0.08, 0.5, 0.5)
 
-# Combine maps side by side with divider
+# -------------------------
+# COMBINE MAIN MAPS
+# -------------------------
 maps_combined <- (map1_with_inset | map2_with_inset) +
-  plot_layout(widths = c(0.6, 0.4)) &
+  patchwork::plot_layout(widths = c(0.6, 0.4)) &
   theme(plot.margin = margin(0,0,0,0))
 
-# Overlay the divider line across the combined panel
+# -------------------------
+# DIVIDER LINE
+# -------------------------
+divider <- grid::linesGrob(
+  x = grid::unit(c(0.5, 0.5), "npc"),
+  y = grid::unit(c(0, 1), "npc"),
+  gp = grid::gpar(col = "black", lwd = 1)
+)
+
 maps_with_divider <- cowplot::ggdraw(maps_combined) +
   cowplot::draw_grob(divider)
 
-# Stack maps and legend
+# -------------------------
+# FINAL PANEL
+# -------------------------
 final_map <- cowplot::plot_grid(
   maps_with_divider,
   legend,
@@ -496,184 +412,23 @@ final_map <- cowplot::plot_grid(
 )
 
 final_map
-
 ```
+
 ```{r maps treatment place}
-map_1 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_1),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_1),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_1),
-    aes(color = phc),
-    size = 3,
-    alpha = 0.7
-  ) +
-  geom_sf_text(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_1,
-                                      CampName_1 != "Kutupalong RC") %>%
-      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
-    aes(label = CampLabel),
-    size = 5, fontface = "bold"
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(
-       color = "Clinical severity") +
-  theme(
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
+#| title: "Treatment place"
+#| fig.asp: 1
+#| out.width: 100%
+#| fig.align: center
+#| fig.margin: 0
 
-map_2 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_2),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_2),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_2),
-    aes(color = phc),
-    size = 3,
-    alpha = 0.7
-  ) +
-  geom_sf_text(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_2,
-                                      CampName_1 != "Nayapara RC") %>%
-      mutate(CampLabel = gsub("Camp ", "", CampName_1)),
-    aes(label = CampLabel),
-    size = 5, fontface = "bold"
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(
-       color = "Clinical severity") +
-  theme(
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
+# =========================
+# MAPS — TREATMENT PLACE (PHC)
+# =========================
 
-map_3 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_3),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_3),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_3),
-    aes(color = phc),
-    size = 3,
-    alpha = 0.7
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(title = "Camp 22",
-       color = "Clinical severity") +
-  theme(
-    plot.title = element_text(face = "bold"),
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
-
-map_4 <- ggplot() +
-  geom_sf(
-    data = sub_blocks %>% filter(CampName_1 %in% group_4),
-    fill = "white",
-    color = "grey80",
-    linewidth = 0.1
-  ) + 
-geom_sf(
-    data = camp_boundaries %>% filter(CampName_1 %in% group_4),
-    fill = NA,
-    color = "black",
-    linewidth = 0.7
-  ) +
-  geom_sf(
-    data = cases_points %>% filter(camp %in% group_4),
-    aes(color = phc),
-    size = 3,
-    alpha = 0.7
-  ) +
-  coord_sf(expand = FALSE) +
-  theme_light() +
-  theme(
-    plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"),
-    panel.background = element_rect(fill = "white", color = NA)
-  ) +
-  labs(title = "Camp 21",
-       color = "Clinical severity") +
-  theme(
-    plot.title = element_text(face = "bold"),
-    axis.text = element_blank(),
-    axis.ticks = element_blank(),
-    axis.title = element_blank(),
-    legend.position = "none",
-    panel.grid = element_blank(),
-    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.6),
-    panel.background = element_blank(),
-    plot.background = element_blank(),
-    plot.margin = margin(0, 0, 0, 0)
-  )
+map_1 <- make_map(camp_groups$group_1, phc, "Kutupalong RC")
+map_2 <- make_map(camp_groups$group_2, phc, "Nayapara RC")
+map_3 <- make_map(camp_groups$group_3, phc, title = "Camp 22")
+map_4 <- make_map(camp_groups$group_4, phc, title = "Camp 21")
 
 ```
 
@@ -683,53 +438,91 @@ geom_sf(
 #| out.width: 100%
 #| fig.align: center
 #| fig.margin: 0
-# Remove margins and borders from maps
-map_1 <- map_1 + theme(plot.margin = margin(0,0,0,0),
-                       panel.border = element_blank())
-map_2 <- map_2 + theme(plot.margin = margin(0,0,0,0),
-                       panel.border = element_blank())
-map_3 <- map_3 + theme(plot.margin = margin(0,0,0,0))
-map_4 <- map_4 + theme(plot.margin = margin(0,0,0,0))
 
-# Extract legend once
-legend <- cowplot::get_legend(
-  map_1 + theme(legend.position = "bottom",
-                legend.title = element_text(face = "bold", size = 18),
-                legend.text  = element_text(size = 16))
-)
+build_map_panel <- function(map_1, map_2, map_3, map_4) {
 
-# Build inset composites
-map1_with_inset <- cowplot::ggdraw() +
-  cowplot::draw_plot(map_1, -0.1, 0, 1, 1) +
-  cowplot::draw_plot(map_3, 0.5, 0.02, 0.3, 0.3)
+  # -------------------------
+  # TRIM MAPS
+  # -------------------------
+  trim_map <- function(p) {
+    p + theme(
+      plot.margin = margin(0,0,0,0),
+      panel.border = element_blank()
+    )
+  }
 
-map2_with_inset <- cowplot::ggdraw() +
-  cowplot::draw_plot(map_2, 0, 0, 1, 1) +
-  cowplot::draw_plot(map_4, -0.2, -0.08, 0.5, 0.5)
+  maps <- list(
+    m1 = trim_map(map_1),
+    m2 = trim_map(map_2),
+    m3 = trim_map(map_3),
+    m4 = trim_map(map_4)
+  )
 
-# Create a vertical divider line grob
-divider <- grid::linesGrob(x = unit(c(0.5, 0.5), "npc"),
-                           y = unit(c(0, 1), "npc"),
-                           gp = grid::gpar(col = "black", lwd = 1))
+  # -------------------------
+  # LEGEND
+  # -------------------------
+  legend <- cowplot::get_legend(
+    maps$m1 +
+      theme(
+        legend.position = "bottom",
+        legend.title = element_text(face = "bold", size = 18),
+        legend.text  = element_text(size = 16)
+      )
+  )
 
-# Combine maps side by side with divider
-maps_combined <- (map1_with_inset | map2_with_inset) +
-  plot_layout(widths = c(0.6, 0.4)) &
-  theme(plot.margin = margin(0,0,0,0))
+  # -------------------------
+  # INSET FUNCTION
+  # -------------------------
+  add_inset <- function(main_map, inset_map, x, y, w, h) {
+    cowplot::ggdraw() +
+      cowplot::draw_plot(main_map, -0.1, 0, 1, 1) +
+      cowplot::draw_plot(inset_map, x, y, w, h)
+  }
 
-# Overlay the divider line across the combined panel
-maps_with_divider <- cowplot::ggdraw(maps_combined) +
-  cowplot::draw_grob(divider)
+map1_with_inset <- add_inset(maps$m1, maps$m3, 0.5, 0.02, 0.3, 0.3)
+map2_with_inset <- add_inset(maps$m2, maps$m4, -0.2, -0.08, 0.5, 0.5)
 
-# Stack maps and legend
-final_map <- cowplot::plot_grid(
-  maps_with_divider,
-  legend,
-  ncol = 1,
-  rel_heights = c(0.5, 0.08)
-)
+  # -------------------------
+  # COMBINE
+  # -------------------------
+  maps_combined <- (map1_with_inset | map2_with_inset) +
+    patchwork::plot_layout(widths = c(0.6, 0.4)) &
+    theme(plot.margin = margin(0,0,0,0))
 
-final_map
+  # -------------------------
+  # DIVIDER
+  # -------------------------
+  divider <- grid::linesGrob(
+    x = grid::unit(c(0.5, 0.5), "npc"),
+    y = grid::unit(c(0, 1), "npc"),
+    gp = grid::gpar(col = "black", lwd = 1)
+  )
+
+  maps_with_divider <- cowplot::ggdraw(maps_combined) +
+    cowplot::draw_grob(divider)
+
+  # -------------------------
+  # FINAL OUTPUT
+  # -------------------------
+  cowplot::plot_grid(
+    maps_with_divider,
+    legend,
+    ncol = 1,
+    rel_heights = c(0.5, 0.08)
+  )
+}
+# -------------------------
+# CREATE MAPS (PHC)
+# -------------------------
+map_1 <- make_map(camp_groups$group_1, phc, "Kutupalong RC")
+map_2 <- make_map(camp_groups$group_2, phc, "Nayapara RC")
+map_3 <- make_map(camp_groups$group_3, phc, title = "Camp 22")
+map_4 <- make_map(camp_groups$group_4, phc, title = "Camp 21")
+
+# -------------------------
+# RENDER PANEL
+# -------------------------
+build_map_panel(map_1, map_2, map_3, map_4)
 
 ```
 
@@ -739,44 +532,39 @@ final_map
 
 ```{r values 1}
 div(
-  style = "background-color:white; padding:0px; border-radius:0px; font-size:14px;",
-  div(span(strong("Total Cases: "), total_cases),
-  div(span(strong("Weekly Cases: "), weekly_cases),
-  div(span(strong("Yesterday's Cases: "), yesterdays_cases),
-      style = "border-bottom:1px solid black; padding-bottom:2px;")
-)))
+  style = "background-color:white; font-size:14px;",
+  span(strong("Total Cases: "), total_cases), br(),
+  span(strong("Weekly Cases: "), weekly_cases), br(),
+  span(
+    strong("Yesterday's Cases: "), yesterdays_cases,
+    style = "border-bottom:1px solid black; padding-bottom:2px;"
+  )
+)
 ```
 
 ```{r values 2}
 div(
-  style = "background-color:white; padding:0px; border-radius:0px; font-size:14px;",
-  div(
-    span(strong("IPD Cases: "), severe_cases),
-    div(
-      span(strong("Weekly IPD Cases: "), weekly_severe_cases),
-      div(
-        span(strong("Yesterday's IPD Cases: "), yesterdays_severe_cases),
-        style = "border-bottom:1px solid black; padding-bottom:2px;"
-      )
-    )
+  style = "background-color:white; font-size:14px;",
+  span(strong("IPD Cases: "), severe_cases), br(),
+  span(strong("Weekly IPD Cases: "), weekly_severe_cases), br(),
+  span(
+    strong("Yesterday's IPD Cases: "), yesterdays_severe_cases,
+    style = "border-bottom:1px solid black; padding-bottom:2px;"
   )
 )
 ```
 
 ```{r values 3}
 div(
-  style = "background-color:white; padding:0px; border-radius:0px; font-size:14px;",
-  div(
-    span(strong("OPD Cases: "), simple_cases),
-    div(
-      span(strong("Weekly OPD Cases: "), weekly_simple_cases),
-      div(
-        span(strong("Yesterday's OPD Cases: "), yesterdays_simple_cases),
-        style = "border-bottom:1px solid black; padding-bottom:2px;"
-      )
-    )
+  style = "background-color:white; font-size:14px;",
+  span(strong("OPD Cases: "), simple_cases), br(),
+  span(strong("Weekly OPD Cases: "), weekly_simple_cases), br(),
+  span(
+    strong("Yesterday's OPD Cases: "), yesterdays_simple_cases,
+    style = "border-bottom:1px solid black; padding-bottom:2px;"
   )
 )
+
 ```
 
 ### Row {height="77%"}
@@ -784,32 +572,41 @@ div(
 ```{r values 4}
 #| padding: 0px
 
+# -------------------------
+# PREP WEEKLY DATA
+# -------------------------
 epi_cases_weekly <- epi_cases %>%
-  mutate(
-    # collapse dates into weeks starting on Sunday
-    week_start = floor_date(date_of_visit, unit = "week", week_start = 7),
-    # label directly from the Sunday date
+  dplyr::mutate(
+    week_start = lubridate::floor_date(date_of_visit, "week", week_start = 7),
     week_label = paste0("Wk of ", format(week_start, "%d %b"))
   ) %>%
-  group_by(week_start, week_label, ipd_opd) %>%
-  summarise(
-    cases   = n(),
+  dplyr::group_by(week_start, week_label, ipd_opd) %>%
+  dplyr::summarise(
+    cases   = dplyr::n(),
     min_age = min(age_in_years, na.rm = TRUE),
     max_age = max(age_in_years, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  mutate(
-    age_range = paste0(min_age, "-", max_age, " years"),
-    hover_text = paste0(ipd_opd, " cases: ", cases,
-                        "<br>Age range: ", age_range)
+  dplyr::mutate(
+    hover_text = paste0(
+      ipd_opd, ": ", cases,
+      "<br>Age: ", min_age, "-", max_age, " yrs"
+    )
   )
 
+# -------------------------
+# PLOT
+# -------------------------
 epi_curve <- ggplot(
   epi_cases_weekly,
-  aes(x = factor(week_label, levels = unique(week_label)),
-      y = cases, fill = ipd_opd, text = hover_text)
+  aes(
+    x = factor(week_label, levels = unique(week_label)),
+    y = cases,
+    fill = ipd_opd,
+    text = hover_text
+  )
 ) +
-  geom_col(position = "stack", color = "black", size = 0.1) +
+  geom_col(color = "black", linewidth = 0.2) +
   labs(
     title = "Weekly aggregated cases (Sunday–Saturday)",
     x = NULL,
@@ -823,129 +620,155 @@ epi_curve <- ggplot(
     plot.margin = margin(5, 5, 5, 5)
   )
 
-epi_curve_interactive <- ggplotly(epi_curve, tooltip = "text") %>%
-  style(line = list(width = 0.1)) %>%   # set border width in Plotly
+# -------------------------
+# INTERACTIVE
+# -------------------------
+ggplotly(epi_curve, tooltip = "text") %>%
   config(displayModeBar = FALSE)
-
-epi_curve_interactive
-
 ```
 
 # Indicators 
 ```{r indicators}
-# Start and end date of surveillance and total days surveilled
+# =========================
+# INDICATORS
+# =========================
+
+# -------------------------
+# Surveillance period
+# -------------------------
 surv_start <- min(measles_data$date_of_visit, na.rm = TRUE)
 surv_end   <- max(measles_data$date_of_visit, na.rm = TRUE)
 surv_days  <- as.integer(difftime(surv_end, surv_start, units = "days")) + 1
 
-# total number of Cases 
+# -------------------------
+# Totals
+# -------------------------
 N_total <- nrow(measles_data)
-N_cases_u5 <- measles_data %>% 
-  filter(age_in_years < 5) %>% 
-  nrow()
-# number of OPD cases(includes NAs)
 
-#Number of discharged, LAMA as outcome (IPD)
+N_cases_u5 <- sum(measles_data$age_in_years < 5, na.rm = TRUE)
+
+# -------------------------
+# Outcomes
+# -------------------------
 N_discharge <- sum(measles_data$outcome == "discharged", na.rm = TRUE)
 N_LAMA      <- sum(measles_data$outcome == "lama", na.rm = TRUE)
 
+pct_discharge <- ifelse(N_total > 0, round(N_discharge / N_total * 100, 1), NA)
+pct_LAMA      <- ifelse(N_total > 0, round(N_LAMA / N_total * 100, 1), NA)
 
-pct_discharge <- round(N_discharge / N_total * 100, 1)
-pct_LAMA      <- round(N_LAMA / N_total * 100, 1)
+# -------------------------
+# PHC origin
+# -------------------------
+N_JMS <- sum(measles_data$phc == "new_jms", na.rm = TRUE)
+O_JMS <- sum(measles_data$phc == "old_jms", na.rm = TRUE)
+N_HMS <- sum(measles_data$phc == "hms", na.rm = TRUE)
 
-# camp of origin (all cases)
-N_JMS <- measles_data %>%
-  filter(phc == "new_jms") %>%
-  nrow()
-
-N_HMS <- measles_data %>%
-  filter(phc == "hms") %>%
-  nrow()
-O_JMS <- measles_data %>%
-  filter(phc == "old_jms") %>%
-  nrow()
-
-#Total Population (at risk) = FDMN All camp <5 year age
+# -------------------------
+# Population + attack rate
+# -------------------------
 pop_at_risk <- 184858
 
-# Overall Attack Rate (/1,000) 
-#1st calculate cases amongst population at risk (FDMN)
-N_total_fdmn <- measles_data %>%
-  filter(nationality == "fdmn") %>%
-  nrow()
-#2nd calculate attack rate
+N_total_fdmn <- sum(measles_data$nationality == "fdmn", na.rm = TRUE)
+
 attack_rate <- round(N_total_fdmn / pop_at_risk * 1000, 2)
-#Overall Incidence Rate (/10k/day)
 incidence_rate <- round(N_total_fdmn / pop_at_risk * 10000 / surv_days, 3)
 
-# Severe cases (N and %), 
+# -------------------------
+# Severity
+# -------------------------
 N_severe <- sum(measles_data$clinical_severity == "severe", na.rm = TRUE)
-severe_rate <- round(N_severe / N_total * 100, 2)
+severe_rate <- ifelse(N_total > 0, round(N_severe / N_total * 100, 2), NA)
 
-# deaths and mortality rate (total and in under 5)
-N_deaths    <- sum(measles_data$outcome == "died", na.rm = TRUE)
-#Case fatality
-cfr <- round(N_deaths / N_total * 100, 2)
-deaths_u5 <- measles_data %>%
-  filter(outcome == "died", age_in_years < 5) %>%
-  nrow()
-cfr_u5 <- round(deaths_u5 / N_cases_u5 * 100, 2)
+# -------------------------
+# Deaths / CFR
+# -------------------------
+N_deaths <- sum(measles_data$outcome == "died", na.rm = TRUE)
 
-#Vaccination 
-N_vaccinated <- sum(measles_data$did_the_patient_receive_measle == "yes", na.rm = TRUE)
-vacc_coverage <- round(N_vaccinated / N_total * 100, 1)
+cfr <- ifelse(N_total > 0, round(N_deaths / N_total * 100, 2), NA)
 
-#nationality of patients (N and %)
+deaths_u5 <- sum(
+  measles_data$outcome == "died" &
+  measles_data$age_in_years < 5,
+  na.rm = TRUE
+)
+
+cfr_u5 <- ifelse(N_cases_u5 > 0, round(deaths_u5 / N_cases_u5 * 100, 2), NA)
+
+# -------------------------
+# Vaccination
+# -------------------------
+N_vaccinated <- sum(
+  measles_data$did_the_patient_receive_measle %in% c("yes", "Yes"),
+  na.rm = TRUE
+)
+
+vacc_coverage <- ifelse(N_total > 0,
+                        round(N_vaccinated / N_total * 100, 1),
+                        NA)
+
+# -------------------------
+# Nationality
+# -------------------------
 fdmn <- sum(measles_data$nationality == "fdmn", na.rm = TRUE)
 host <- sum(measles_data$nationality == "host", na.rm = TRUE)
 
-fdmn_pct <- round(fdmn / N_total * 100, 2)
-host_pct <- round(host / N_total * 100, 2)
+fdmn_pct <- ifelse(N_total > 0, round(fdmn / N_total * 100, 2), NA)
+host_pct <- ifelse(N_total > 0, round(host / N_total * 100, 2), NA)
 
-#pneumonia amongst ipd 
-ipd <- measles_data %>% filter(does_this_patient_admitted_and == "yes")
-pneumonia_ipd <- sum(
-  ipd$pneumonia == TRUE,
-  na.rm = TRUE
+# -------------------------
+# IPD subset
+# -------------------------
+ipd <- measles_data %>%
+  dplyr::filter(does_this_patient_admitted_and == "yes")
+
+# Pneumonia among IPD
+pneumonia_ipd <- sum(ipd$pneumonia == TRUE, na.rm = TRUE)
+
+pct_pneumonia_ipd <- ifelse(
+  N_IPD > 0,
+  round(pneumonia_ipd / N_IPD * 100, 1),
+  NA
 )
-pct_pneumonia_ipd <- round(pneumonia_ipd / N_IPD * 100, 1)
 
-#Complications in IPD
+# -------------------------
+# Complications (IPD)
+# -------------------------
 complications_ipd <- ipd %>%
   dplyr::select(starts_with("complications_")) %>%
-  mutate(across(
+  dplyr::mutate(across(
     everything(),
     ~ .x %in% c(TRUE, "TRUE", "true")
   ))
 
 complication_prop <- complications_ipd %>%
-  summarise(across(everything(), ~ sum(.x, na.rm = TRUE))) %>%
-  pivot_longer(
+  dplyr::summarise(across(everything(), ~ sum(.x, na.rm = TRUE))) %>%
+  tidyr::pivot_longer(
     cols = everything(),
     names_to = "complication",
     values_to = "n"
   ) %>%
-  mutate(
-    complication = str_remove(complication, "^complications_"),
-    pct = round(n / N_IPD * 100, 1)
+  dplyr::mutate(
+    complication = stringr::str_remove(complication, "^complications_"),
+    pct = ifelse(N_IPD > 0, round(n / N_IPD * 100, 1), NA)
   )
 
 complication_text <- complication_prop %>%
-  mutate(
+  dplyr::mutate(
     txt = paste0(
-      str_to_title(complication),
+      stringr::str_to_title(complication),
       ": ",
       pct,
       "%"
     )
   ) %>%
-  pull(txt) %>%
+  dplyr::pull(txt) %>%
   paste(collapse = "; ")
 
-DENOMINATOR <- N_total
-
-OPD_pct <-round(N_OPD / N_total * 100, 2)
-IPD_pct <-round(N_IPD / N_total * 100, 2)
+# -------------------------
+# Final proportions
+# -------------------------
+OPD_pct <- ifelse(N_total > 0, round(N_OPD / N_total * 100, 2), NA)
+IPD_pct <- ifelse(N_total > 0, round(N_IPD / N_total * 100, 2), NA)
 ```
 
 ## Row {height = 10%}
@@ -961,174 +784,316 @@ Cox’s Bazar, Bangladesh | `r format(surv_start, "%d %b")`–`r format(surv_end
 ```{r}
 #| title: "Population"
 
-camp_population <- tibble(
+camp_population <- tibble::tibble(
   `Camp / Location` = c(
-    "Camp 14",
-    "Camp 15",
-    "Camp 16",
-    "Host Community",
-    "Other Camps"
+    "Camp 14", "Camp 15", "Camp 16",
+    "Host Community", "Other Camps"
   ),
-  `Pop (At Risk)` = c(
-    39144,
-    66883,
-    27147,
-    541921,
-    1015397
-  ),
-  `Under-5 Pop` = c(
-    6010,
-    11051,
-    4341,
-    86707,
-    163456
-  ),
-  Source = c(
-    "RRRC/UNHCR",
-    "RRRC/UNHCR",
-    "RRRC/UNHCR",
-    "Estimate",
-    "RRRC/UNHCR"
-  ),
-  `Last Updated` = c(
-    "01/01/2026",
-    "01/01/2026",
-    "01/01/2026",
-    "2022",
-    "01/01/2026"
-  )
+  `Pop (At Risk)` = c(39144, 66883, 27147, 541921, 1015397),
+  `Under-5 Pop`   = c(6010, 11051, 4341, 86707, 163456),
+  Source          = c("RRRC/UNHCR", "RRRC/UNHCR", "RRRC/UNHCR", "Estimate", "RRRC/UNHCR"),
+  `Last Updated`  = c("01 Jan 2026", "01 Jan 2026", "01 Jan 2026", "2022", "01 Jan 2026")
 )
 
-camp_population_gt <- camp_population %>%
-  gt() %>%
+camp_population %>%
+  gt::gt() %>%
 
-  # ---- Title ----
-  tab_header(
-    title = md("**Population at Risk by Camp / Location**")
+  # -------------------------
+  # TITLE
+  # -------------------------
+  gt::tab_header(
+    title = gt::md("**Population at Risk by Camp / Location**")
   ) %>%
 
-  # ---- Column labels ----
-  cols_label(
+  # -------------------------
+  # COLUMN LABELS
+  # -------------------------
+  gt::cols_label(
     `Camp / Location` = "Camp / Location",
     `Pop (At Risk)`   = "Population at Risk",
-    `Under-5 Pop`     = "< 5 Population",
+    `Under-5 Pop`     = "<5 Population",
     Source            = "Source",
     `Last Updated`    = "Last Updated"
   ) %>%
 
-  # ---- Number formatting ----
-  fmt_number(
+  # -------------------------
+  # FORMATTING
+  # -------------------------
+  gt::fmt_number(
     columns = c(`Pop (At Risk)`, `Under-5 Pop`),
-    decimals = 0
+    decimals = 0,
+    use_seps = TRUE
   ) %>%
 
-  # ---- Alignment (match age_gt) ----
-  cols_align(
+  # -------------------------
+  # ALIGNMENT
+  # -------------------------
+  gt::cols_align(
     align = "center",
     columns = c(`Pop (At Risk)`, `Under-5 Pop`, `Last Updated`)
   ) %>%
-  cols_align(
+  gt::cols_align(
     align = "left",
     columns = c(`Camp / Location`, Source)
   ) %>%
 
-  # ---- Typography (same as age_gt) ----
-  opt_table_font(
+  # -------------------------
+  # TYPOGRAPHY
+  # -------------------------
+  gt::opt_table_font(
     font = list(
-      google_font("Roboto"),
-      default_fonts()
+      gt::google_font("Roboto"),
+      gt::default_fonts()
     )
   ) %>%
-  opt_align_table_header(align = "left") %>%
+  gt::opt_align_table_header(align = "left") %>%
 
-  # ---- Title bar (Yeti blue, same as age_gt) ----
-  tab_style(
+  # -------------------------
+  # STYLING
+  # -------------------------
+  gt::tab_style(
     style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
     ),
-    locations = cells_title(groups = "title")
+    locations = gt::cells_title(groups = "title")
   ) %>%
 
-  # ---- Column headers (blue, bold – same as age_gt) ----
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels(everything())
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels(gt::everything())
   ) %>%
 
-  # ---- Body text ----
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
+  gt::tab_style(
+    style = gt::cell_text(color = "black"),
+    locations = gt::cells_body()
   ) %>%
 
-  # ---- Layout ----
-  cols_width(
-    `Camp / Location` ~ px(200),
-    `Pop (At Risk)`   ~ px(135),
-    `Under-5 Pop`     ~ px(135),
-    Source            ~ px(140),
-    `Last Updated`    ~ px(120)
+  # -------------------------
+  # COLUMN WIDTHS
+  # -------------------------
+  gt::cols_width(
+    `Camp / Location` ~ gt::px(200),
+    `Pop (At Risk)`   ~ gt::px(140),
+    `Under-5 Pop`     ~ gt::px(140),
+    Source            ~ gt::px(140),
+    `Last Updated`    ~ gt::px(120)
   )
-
-camp_population_gt
 ```
 
+```{r attack rate}
+#| title: "Incidence"
+
+# FDMN (Camps + Other Camps)
+pop_fdmn_total <- 39144 + 66883 + 27147 + 1015397
+pop_fdmn_u5    <- 6010  + 11051 + 4341  + 163456
+
+# Host community
+pop_host_total <- 541921
+pop_host_u5    <- 86707
+
+# Combined populations
+pop_total    <- pop_fdmn_total + pop_host_total
+pop_total_u5 <- pop_fdmn_u5 + pop_host_u5
+
+
+# =========================
+# PREP DATA
+# =========================
+inc_base <- measles_data %>%
+  dplyr::mutate(
+    date_of_visit = as.Date(date_of_visit),
+    month = lubridate::floor_date(date_of_visit, "month"),
+    U5 = age_in_years < 5,
+    FDMN = nationality == "fdmn"
+  ) %>%
+  dplyr::filter(!is.na(month))
+
+
+# =========================
+# MONTHLY ATTACK RATE
+# =========================
+inc_monthly <- inc_base %>%
+  dplyr::group_by(month) %>%
+  dplyr::summarise(
+
+    # Case counts
+    cases_fdmn_total = sum(FDMN, na.rm = TRUE),
+    cases_total      = dplyr::n(),
+
+    cases_fdmn_u5    = sum(FDMN & U5, na.rm = TRUE),
+    cases_total_u5   = sum(U5, na.rm = TRUE),
+
+    .groups = "drop"
+  ) %>%
+
+  dplyr::mutate(
+    # Attack rates (/1000 population)
+    inc_fdmn_total = (cases_fdmn_total / pop_fdmn_total) * 1000,
+    inc_total      = (cases_total / pop_total) * 1000,
+
+    inc_fdmn_u5    = (cases_fdmn_u5 / pop_fdmn_u5) * 1000,
+    inc_total_u5   = (cases_total_u5 / pop_total_u5) * 1000
+  )
+
+
+# =========================
+# OVERALL ATTACK RATE
+# =========================
+inc_total <- inc_base %>%
+  dplyr::summarise(
+    cases_fdmn_total = sum(FDMN, na.rm = TRUE),
+    cases_total      = dplyr::n(),
+
+    cases_fdmn_u5    = sum(FDMN & U5, na.rm = TRUE),
+    cases_total_u5   = sum(U5, na.rm = TRUE)
+  ) %>%
+  dplyr::mutate(
+    month = "Overall",
+
+    inc_fdmn_total = (cases_fdmn_total / pop_fdmn_total) * 1000,
+    inc_total      = (cases_total / pop_total) * 1000,
+
+    inc_fdmn_u5    = (cases_fdmn_u5 / pop_fdmn_u5) * 1000,
+    inc_total_u5   = (cases_total_u5 / pop_total_u5) * 1000
+  )
+
+
+# =========================
+# MERGE MONTHLY + TOTAL
+# =========================
+inc_all <- dplyr::bind_rows(
+  inc_monthly %>%
+    dplyr::mutate(month = format(month, "%b %Y")),
+  inc_total
+)
+
+
+# =========================
+# RESHAPE FOR TABLE
+# =========================
+inc_long <- inc_all %>%
+  dplyr::select(
+    month,
+    inc_fdmn_u5,
+    inc_total_u5,
+    inc_fdmn_total,
+    inc_total
+  ) %>%
+  tidyr::pivot_longer(
+    cols = -month,
+    names_to = "Indicator",
+    values_to = "Incidence"
+  ) %>%
+  dplyr::mutate(
+    Indicator = dplyr::case_when(
+      Indicator == "inc_fdmn_u5"    ~ "U5 FDMN",
+      Indicator == "inc_total_u5"   ~ "U5 Total",
+      Indicator == "inc_fdmn_total" ~ "Total FDMN",
+      Indicator == "inc_total"      ~ "Total Population"
+    )
+  )
+
+
+# =========================
+# FINAL TABLE
+# =========================
+inc_long %>%
+  tidyr::pivot_wider(
+    names_from = month,
+    values_from = Incidence
+  ) %>%
+  gt::gt() %>%
+
+  # Title
+  gt::tab_header(
+    title = gt::md("**Attack Rate (/1,000 population)**")
+  ) %>%
+
+  # Alignment
+  gt::cols_align("left", Indicator) %>%
+  gt::cols_align("center", -Indicator) %>%
+
+  # Formatting
+  gt::fmt_number(
+    columns = -Indicator,
+    decimals = 2
+  ) %>%
+
+  gt::fmt_missing(everything(), missing_text = "") %>%
+
+  # Font
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
+  ) %>%
+
+  # Styling
+  gt::tab_style(
+    style = list(
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
+    ),
+    locations = gt::cells_title(groups = "title")
+  ) %>%
+
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels()
+  )
+
+```
 
 ```{r second indicator table}
 #| title: "Surveillance"
 
-# ------------------------------------------------------------------
-# 1. Define indicator labels (ASCII-safe, fixed length = 22)
-# ------------------------------------------------------------------
-
-indicators <- c(
-  "Discharged - N (%)",
-  "LAMA - N (%)",
-  "Died - N (%)",
-
-  "New JMS cases",
-  "Old JMS cases",
-  "HMS cases",
-
-  "Overall attack rate (/1,000)",
-  "Overall incidence rate (/10,000 pop-day)",
-
-  "Deaths - N (overall)",
-  "Case fatality rate - overall (%)",
-
-  "Deaths <5 years - N",
-  "Case fatality rate - <5 years (%)",
-
-  "Vaccinated - N",
-  "Vaccination coverage (%)",
-
-  "Unvaccinated - N (%)",
-
-  "FDMN (Rohingya) - N (%)",
-  "Host (Bangladeshi) - N (%)",
-
-  "SAM - N (<5y, MUAC <11.5 cm)",
-  "MAM - N (<5y, MUAC 11.5-12.4)"
-)
-
-
+# -------------------------
+# Helper: section rows
+# -------------------------
 add_section <- function(title) {
-  tibble(
+  tibble::tibble(
     Indicator    = title,
-    N    = NA,
+    N            = NA,
     Denominator  = NA,
     `Rate / %`   = NA
   )
 }
 
+# -------------------------
+# BUILD TABLE (NO ATTACK / INCIDENCE)
+# -------------------------
+surveillance_overview <- tibble::tibble(
 
-# ------------------------------------------------------------------
-# 2. Build the surveillance overview table
-# ------------------------------------------------------------------
+  Indicator = c(
+    # Clinical outcomes
+    "Discharged - N (%)",
+    "LAMA - N (%)",
+    "Died - N (%)",
 
-surveillance_overview <- tibble(
-  Indicator = indicators,
+    # Case classification
+    "New JMS cases",
+    "Old JMS cases",
+    "HMS cases",
+
+    # Mortality
+    "Deaths - N (overall)",
+    "Case fatality rate - overall (%)",
+    "Deaths <5 years - N",
+    "Case fatality rate - <5 years (%)",
+
+    # Vaccination
+    "Vaccinated - N",
+    "Vaccination coverage (%)",
+    "Unvaccinated - N (%)",
+
+    # Nationality
+    "FDMN (Rohingya) - N (%)",
+    "Host (Bangladeshi) - N (%)",
+
+    # Nutrition
+    "SAM - N (<5y)",
+    "MAM - N (<5y)"
+  ),
+
   N = c(
     N_discharge,
     N_LAMA,
@@ -1138,25 +1103,20 @@ surveillance_overview <- tibble(
     O_JMS,
     N_HMS,
 
-    N_total_fdmn,
-    N_total_fdmn,
-
     N_deaths,
     N_deaths,
-
     deaths_u5,
     deaths_u5,
 
     N_vaccinated,
     N_vaccinated,
-
     N_total - N_vaccinated,
 
     fdmn,
     host,
 
-    sam$final_diagnoses_severe_acute_malnutrition,
-    mam$final_diagnoses_moderate_acute_malnutrition
+    nutrition_u5$SAM,
+    nutrition_u5$MAM
   ),
 
   Denominator = c(
@@ -1168,25 +1128,20 @@ surveillance_overview <- tibble(
     N_total,
     N_total,
 
-    pop_at_risk,
-    pop_at_risk * surv_days,
-#Deaths
     NA,
     N_total,
-#Deaths under 5
-    N_cases_u5,
+    NA,
     N_cases_u5,
 
     NA,
     N_total,
-
     N_total,
 
     N_total,
     N_total,
 
-    sam$total,
-    mam$total
+    nutrition_u5$total,
+    nutrition_u5$total
   ),
 
   `Rate / %` = c(
@@ -1198,203 +1153,152 @@ surveillance_overview <- tibble(
     round(O_JMS / N_total * 100, 1),
     round(N_HMS / N_total * 100, 1),
 
-    attack_rate,
-    incidence_rate,
-
     NA,
     cfr,
-
     NA,
     cfr_u5,
 
     NA,
     vacc_coverage,
-
     round((N_total - N_vaccinated) / N_total * 100, 1),
 
-    round(fdmn / N_total * 100, 1),
-    round(host / N_total * 100, 1),
+    fdmn_pct,
+    host_pct,
 
-    round(
-      sam$final_diagnoses_severe_acute_malnutrition / sam$total * 100, 1
-    ),
-    round(
-      mam$final_diagnoses_moderate_acute_malnutrition / mam$total * 100, 1
-    )
+    round(nutrition_u5$SAM / nutrition_u5$total * 100, 1),
+    round(nutrition_u5$MAM / nutrition_u5$total * 100, 1)
   )
 )
 
-
-surveillance_overview_clean <- surveillance_overview %>%
-  filter(
-    !Indicator %in% c(
-      "Severe cases - N",
-      "Severe rate (%)"
-    )
-  )
-
-surveillance_overview_final <- bind_rows(
+# -------------------------
+# ADD SECTIONS (FIXED SLICES)
+# -------------------------
+surveillance_overview_final <- dplyr::bind_rows(
   add_section("CLINICAL OUTCOMES"),
-  surveillance_overview_clean %>% slice(1:3),
+  surveillance_overview[1:3, ],
 
   add_section("CASE CLASSIFICATION"),
-  surveillance_overview_clean %>% slice(4:6),
-
-  add_section("POPULATION & INCIDENCE"),
-  surveillance_overview_clean %>% slice(7:9),
+  surveillance_overview[4:6, ],
 
   add_section("MORTALITY"),
-  surveillance_overview_clean %>% slice(10:13),
+  surveillance_overview[7:10, ],
 
   add_section("VACCINATION STATUS"),
-  surveillance_overview_clean %>% slice(14:16),
+  surveillance_overview[11:13, ],
 
   add_section("NATIONALITY"),
-  surveillance_overview_clean %>% slice(16:17),
+  surveillance_overview[14:15, ],
 
   add_section("NUTRITION STATUS (<5 YEARS)"),
-  surveillance_overview_clean %>% slice(18:n())
+  surveillance_overview[16:17, ]
 )
 
-# ------------------------------------------------------------------
-# 3. Create a formatted flextable (SECTION 1 style)
-# ------------------------------------------------------------------
+# -------------------------
+# GT TABLE
+# -------------------------
+surveillance_overview_final %>%
+  gt::gt() %>%
 
-N_total_fdmn <- measles_data %>%
-  filter(nationality == "fdmn") %>%
-  nrow()
-attack_rate <- round(N_total_fdmn / pop_at_risk * 1000, 2)
-
-surveillance_gt <- surveillance_overview_final %>%
-  gt() %>%
-
-  # -------------------------------------------------
-  # TABLE HEADER (blue background, white text)
-  # -------------------------------------------------
-  tab_header(
-    title = md("**SURVEILLANCE INDICATORS**")
+  gt::tab_header(
+    title = gt::md("**SURVEILLANCE INDICATORS**")
   ) %>%
 
-  # -------------------------------------------------
-  # COLUMN LABELS (blue text on white background)
-  # -------------------------------------------------
-  cols_label(
+  gt::cols_label(
     Indicator   = "Indicator",
     N           = "N",
     Denominator = "Denominator",
     `Rate / %`  = "%"
   ) %>%
 
-  # -------------------------------------------------
-  # Alignment
-  # -------------------------------------------------
-  cols_align(
+  gt::cols_align(
     align = "center",
     columns = c("N", "Denominator", "Rate / %")
   ) %>%
-  cols_align(
+  gt::cols_align(
     align = "left",
     columns = "Indicator"
   ) %>%
 
-  # -------------------------------------------------
-  # Number formatting
-  # -------------------------------------------------
-  fmt_number(
-    columns  = c("N", "Denominator"),
+  gt::fmt_number(
+    columns = c("N", "Denominator"),
     decimals = 0
   ) %>%
-  fmt_number(
-    columns  = "Rate / %",
+  gt::fmt_number(
+    columns = "Rate / %",
     decimals = 1
   ) %>%
-  fmt_missing(
-    columns = c("N", "Denominator", "Rate / %"),
+  gt::fmt_missing(
+    columns = everything(),
     missing_text = ""
   ) %>%
 
-  # -------------------------------------------------
-  # HEADER STYLING
-  # -------------------------------------------------
-
-  # Blue background + white text for table title
-  tab_style(
+  # Styling
+  gt::tab_style(
     style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
     ),
-    locations = cells_title(groups = "title")
+    locations = gt::cells_title(groups = "title")
   ) %>%
 
-  # Blue text for column headers
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels()
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels()
   ) %>%
 
-  # -------------------------------------------------
-  # Section headers (rows created by add_section)
-  # -------------------------------------------------
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_body(rows = is.na(`N`))
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_body(rows = is.na(N))
   ) %>%
 
-  # -------------------------------------------------
-  # Body text
-  # -------------------------------------------------
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
   ) %>%
 
-  # -------------------------------------------------
-  # Table font & layout
-  # -------------------------------------------------
-  opt_table_font(
-    font = list(google_font("Roboto"), default_fonts())
-  ) %>%
-  opt_align_table_header(align = "center") %>%
-  cols_width(
-    Indicator   ~ px(420),
-    everything() ~ px(120)
+  gt::cols_width(
+    Indicator   ~ gt::px(420),
+    everything() ~ gt::px(120)
   )
-
-surveillance_gt
-
 ```
 
 
 ```{r referral}
-#| title: "Isolation ward"
+#| title: "Isolation"
 #| fig.asp: 1
 #| out.width: 100%
 #| fig.align: center
 #| fig.margin: 0
 
+# -------------------------
+# IPD DATA
+# -------------------------
 ipd <- measles_data %>%
-  filter(ipd_opd == "IPD")
+  dplyr::filter(ipd_opd == "IPD")
 
 N_IPD <- nrow(ipd)
 
-
+# -------------------------
+# PARSE LENGTH OF STAY
+# -------------------------
 parse_los_minutes <- function(x) {
-  hrs <- as.numeric(stringr::str_extract(x, "\\d+(?=\\s*hours?)"))
+  hrs  <- as.numeric(stringr::str_extract(x, "\\d+(?=\\s*hours?)"))
   mins <- as.numeric(stringr::str_extract(x, "\\d+(?=\\s*minutes?)"))
 
-  hrs[is.na(hrs)] <- 0
+  hrs[is.na(hrs)]  <- 0
   mins[is.na(mins)] <- 0
 
   hrs * 60 + mins
 }
 
 ipd <- ipd %>%
-  mutate(
-    los_minutes = parse_los_minutes(los_final)
-  )
-total_los_days <- sum(ipd$los_minutes, na.rm = TRUE) / 60 / 24
-avg_los_days <- total_los_days / N_IPD
+  dplyr::mutate(los_minutes = parse_los_minutes(los_final))
 
+total_los_days <- sum(ipd$los_minutes, na.rm = TRUE) / 60 / 24
+avg_los_days <- ifelse(N_IPD > 0, total_los_days / N_IPD, NA)
+
+# -------------------------
+# INDICATOR TABLE
+# -------------------------
 indicator_tbl <- tibble::tibble(
 
   Indicator = c(
@@ -1414,263 +1318,214 @@ indicator_tbl <- tibble::tibble(
 
   Numerator = c(
     N_IPD,
-    sum(!is.na(ipd$referral_from) & !ipd$referral_from %in% c("n/a", "n_a", "")),
-    sum(is.na(ipd$referral_from) | ipd$referral_from %in% c("n/a", "n_a", "")),
-    sum(ipd$age_in_years < 5, na.rm = TRUE),
-    sum(ipd$did_the_patient_receive_measle == "no", na.rm = TRUE),
-    sum(
-  ipd$final_diagnoses_severe_pneumonia == "TRUE" |
-  ipd$final_diagnoses_simple_pneumonia == "TRUE",
-  na.rm = TRUE
-),
-    sum(ipd$final_diagnoses_severe_pneumonia == "TRUE", na.rm = TRUE),
-    sum(ipd$final_diagnoses_simple_pneumonia == "TRUE", na.rm = TRUE),
 
-    # ✅ SAM OR MAM (either diagnosis)
+    sum(!is.na(ipd$referral_from) & !ipd$referral_from %in% c("n/a", "n_a", "")),
+
+    sum(is.na(ipd$referral_from) | ipd$referral_from %in% c("n/a", "n_a", "")),
+
+    sum(ipd$age_in_years < 5, na.rm = TRUE),
+
+    sum(ipd$did_the_patient_receive_measle %in% c("no", "No"), na.rm = TRUE),
+
+    # Pneumonia (any)
     sum(
-      ipd$final_diagnoses_severe_acute_malnutrition == "TRUE" |
-      ipd$final_diagnoses_moderate_acute_malnutrition == "TRUE",
+      ipd$final_diagnoses_severe_pneumonia %in% c(TRUE, "TRUE") |
+      ipd$final_diagnoses_simple_pneumonia %in% c(TRUE, "TRUE"),
       na.rm = TRUE
     ),
 
-    # ✅ SAM only
-    sum(ipd$final_diagnoses_severe_acute_malnutrition == "TRUE", na.rm = TRUE),
+    # Severe pneumonia
+    sum(ipd$final_diagnoses_severe_pneumonia %in% c(TRUE, "TRUE"), na.rm = TRUE),
 
-    # ✅ MAM only
-    sum(ipd$final_diagnoses_moderate_acute_malnutrition == "TRUE", na.rm = TRUE),
+    # Simple pneumonia
+    sum(ipd$final_diagnoses_simple_pneumonia %in% c(TRUE, "TRUE"), na.rm = TRUE),
 
-    sum(ipd$did_the_patient_receive_vitamin_a == "yes", na.rm = TRUE)
+    # SAM or MAM
+    sum(
+      ipd$final_diagnoses_severe_acute_malnutrition %in% c(TRUE, "TRUE") |
+      ipd$final_diagnoses_moderate_acute_malnutrition %in% c(TRUE, "TRUE"),
+      na.rm = TRUE
+    ),
+
+    # SAM
+    sum(ipd$final_diagnoses_severe_acute_malnutrition %in% c(TRUE, "TRUE"), na.rm = TRUE),
+
+    # MAM
+    sum(ipd$final_diagnoses_moderate_acute_malnutrition %in% c(TRUE, "TRUE"), na.rm = TRUE),
+
+    sum(ipd$did_the_patient_receive_vitamin_a %in% c("yes", "Yes"), na.rm = TRUE)
   ),
 
-  Denominator = c(
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD,
-    N_IPD
-  )
+  Denominator = rep(N_IPD, 12)
 ) %>%
-  mutate(
-    `Rate / %` = round(Numerator / Denominator * 100, 2),
+  dplyr::mutate(
+    `Rate / %` = ifelse(
+      Denominator > 0,
+      round(Numerator / Denominator * 100, 1),
+      NA
+    )
   )
 
+# -------------------------
+# GT TABLE
+# -------------------------
+indicator_tbl %>%
+  gt::gt() %>%
 
-section3_gt <- indicator_tbl %>%
-  gt() %>%
-
-  tab_header(
-    title = md("**Isolation Centre OJMS — IPD (Admitted Patients)**")
+  gt::tab_header(
+    title = gt::md("**Isolation Centre OJMS — IPD (Admitted Patients)**")
   ) %>%
 
-  cols_label(
-    Indicator        = "Indicator (IPD only)",
-    Numerator        = "Numerator",
-    Denominator      = "Total IPD",
-    `Rate / %`       = "Rate / %",
+  gt::cols_label(
+    Indicator   = "Indicator (IPD only)",
+    Numerator   = "Numerator",
+    Denominator = "Total IPD",
+    `Rate / %`  = "%"
   ) %>%
 
-  cols_align(align = "left", columns = Indicator) %>%
-  cols_align(align = "center", columns = -Indicator) %>%
+  gt::cols_align(align = "left", columns = Indicator) %>%
+  gt::cols_align(align = "right", columns = -Indicator) %>%
 
-  opt_table_font(
-    font = list(google_font("Roboto"), default_fonts())
+  # Formatting
+  gt::fmt_number(columns = c(Numerator, Denominator), decimals = 0) %>%
+  gt::fmt_number(columns = `Rate / %`, decimals = 0) %>%
+  gt::fmt_missing(everything(), missing_text = "") %>%
+
+  # Styling
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
   ) %>%
-  opt_align_table_header(align = "left") %>%
+  gt::opt_align_table_header(align = "left") %>%
 
-  # Title bar
-  tab_style(
+  gt::tab_style(
     style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
     ),
-    locations = cells_title(groups = "title")
+    locations = gt::cells_title(groups = "title")
   ) %>%
 
-  # Column headers
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels(everything())
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels(gt::everything())
   ) %>%
 
-  # Body text
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
+  gt::tab_style(
+    style = gt::cell_text(color = "black"),
+    locations = gt::cells_body()
   ) %>%
 
-  # Indent sub‑indicators
-  tab_style(
-    style = cell_text(indent = px(15)),
-    locations = cells_body(rows = grepl("^—", Indicator))
+  # Indentation for sub-rows
+  gt::tab_style(
+    style = gt::cell_text(indent = gt::px(15)),
+    locations = gt::cells_body(rows = grepl("^—", Indicator))
   ) %>%
 
-  cols_width(
-    Indicator ~ px(360),
-    everything() ~ px(120)
-  ) %>% 
-  fmt_number(
-  columns = Numerator,
-  decimals = 0
-) %>% 
-  cols_align(
-  align = "right",
-  columns = Numerator
-) %>% 
-   fmt_number(
-  columns = Denominator,
-  decimals = 0
-) %>% 
-  cols_align(
-  align = "right",
-  columns = Denominator
-) %>% 
-  fmt_number(
-  columns = `Rate / %`,
-  decimals = 0
-) %>% 
-  cols_align(
-  align = "right",
-  columns = `Rate / %`
-)
+  gt::cols_width(
+    Indicator ~ gt::px(360),
+    everything() ~ gt::px(120)
+  ) %>%
 
-
-section3_gt <- section3_gt %>%
-  tab_source_note(
-    md(paste0("**Average length of stay:** ", round(avg_los_days, 2), " days"))
+  # -------------------------
+  # SOURCE NOTE (LOS)
+  # -------------------------
+  gt::tab_source_note(
+    gt::md(
+      paste0("**Average length of stay:** ",
+             round(avg_los_days, 2),
+             " days")
+    )
   )
-
-section3_gt
-
 ```
-
 
 ```{r second tab}
 #| title: "Age groups"
-#| fig.asp: 1
-#| out.width: 100%
-#| fig.align: center
-#| fig.margin: 0
 
-# define age groups
-
-measles_data_age <- measles_data |>
-  mutate(
+# -------------------------
+# PREP AGE DATA
+# -------------------------
+measles_data_age <- measles_data %>%
+  dplyr::mutate(
     age_in_months = as.integer(age_in_months),
-    age_group = case_when(
+
+    age_group = dplyr::case_when(
       age_in_years == 0 & age_in_months < 9  ~ "<9 months",
       age_in_years == 0 & age_in_months >= 9 ~ "9 months–4 years",
       age_in_years >= 1 & age_in_years < 5   ~ "9 months–4 years",
       age_in_years >= 5 & age_in_years < 15  ~ "5–14 years",
       age_in_years >= 15                     ~ "≥15 years",
-      TRUE                                   ~ NA_character_
-    ))
+      TRUE                                  ~ NA_character_
+    )
+  )
 
-age_prop <- measles_data_age |>
-  count(age_group) |>
-  rename(N_all = n)
+# -------------------------
+# TOTAL DISTRIBUTION
+# -------------------------
+age_prop <- measles_data_age %>%
+  dplyr::count(age_group, name = "N_all")
 
-# Severe IPD cases by age group
-age_severe_ipd <- measles_data_age |>
-  filter(
-    does_this_patient_admitted_and == "yes",
-    clinical_severity == "severe"
-  ) |>
-  count(age_group, name = "Severe_IPD_N")
+# OPD / IPD split
+age_prop_opd <- measles_data_age %>%
+  dplyr::filter(does_this_patient_admitted_and %in% c("no", "n/a")) %>%
+  dplyr::count(age_group, name = "OPD_N")
 
-# ---------- Prepare OPD age distribution ----------
-age_prop_opd <- measles_data_age |>
-  filter(does_this_patient_admitted_and %in% c("no", "n/a")) |>
-  count(age_group, name = "OPD_N")
+age_prop_ipd <- measles_data_age %>%
+  dplyr::filter(does_this_patient_admitted_and == "yes") %>%
+  dplyr::count(age_group, name = "IPD_N")
 
-# ---------- Prepare IPD age distribution (reuse logic) ----------
-age_prop_ipd_full <- measles_data_age |>
-  filter(does_this_patient_admitted_and == "yes") |>
-  count(age_group, name = "IPD_N")
-
-# ---------- Combine ALL / OPD / IPD ----------
-
-age_section2 <- age_prop |>
-  left_join(age_prop_opd, by = "age_group") |>
-  left_join(age_prop_ipd_full, by = "age_group") |>
-  mutate(
+# -------------------------
+# MERGE
+# -------------------------
+age_section <- age_prop %>%
+  dplyr::left_join(age_prop_opd, by = "age_group") %>%
+  dplyr::left_join(age_prop_ipd, by = "age_group") %>%
+  dplyr::mutate(
     OPD_N = tidyr::replace_na(OPD_N, 0),
     IPD_N = tidyr::replace_na(IPD_N, 0),
+    Denominator = N_total,
+    `% Total` = round(N_all / N_total * 100, 2)
+  )
+
+# -------------------------
+# UNDER 5 TOTAL
+# -------------------------
+under5_row <- age_section %>%
+  dplyr::filter(age_group %in% c("<9 months", "9 months–4 years")) %>%
+  dplyr::summarise(
+    age_group   = "UNDER 5 TOTAL (<5 years)",
+    N_all       = sum(N_all),
+    OPD_N       = sum(OPD_N),
+    IPD_N       = sum(IPD_N),
     Denominator = N_total,
     `% Total`   = round(N_all / N_total * 100, 2)
   )
 
+# -------------------------
+# SEVERE IPD
+# -------------------------
+severe_ipd <- measles_data_age %>%
+  dplyr::filter(
+    does_this_patient_admitted_and == "yes",
+    clinical_severity == "severe"
+  ) %>%
+  dplyr::count(age_group, name = "Severe_IPD_N")
 
-age_levels <- c(
-  "<9 months",
-  "9 months–4 years",
-  "UNDER 5 TOTAL (<5 years)",
-  "5–14 years",
-  "≥15 years"
-)
-
-# ---------- UNDER‑5 TOTAL row ----------
-under5_row <- age_section2 |>
-  filter(age_group %in% c("<9 months", "9 months–4 years")) |>
-  summarise(
-    age_group   = "UNDER 5 TOTAL (<5 years)",
-    N_all       = sum(N_all),
-    Denominator = N_total,
-    `% Total`   = round(N_all / N_total * 100, 2),
-    OPD_N       = sum(OPD_N),
-    IPD_N       = sum(IPD_N)
-  )
-
-# ---- UNDER‑5 Severe IPD row (THIS IS THE FIX) ----
-severe_under5_row <- measles_data_age |>
-  filter(
+severe_under5 <- measles_data_age %>%
+  dplyr::filter(
     does_this_patient_admitted_and == "yes",
     clinical_severity == "severe",
     age_group %in% c("<9 months", "9 months–4 years")
-  ) |>
-  summarise(
-    age_group    = "UNDER 5 TOTAL (<5 years)",
-    Severe_IPD_N = n()
+  ) %>%
+  dplyr::summarise(
+    age_group = "UNDER 5 TOTAL (<5 years)",
+    Severe_IPD_N = dplyr::n()
   )
 
-# ---- Combine age‑specific + UNDER‑5 Severe IPD ----
-age_severe_ipd_final <- bind_rows(
-  age_severe_ipd,
-  severe_under5_row
-)
+severe_ipd_final <- dplyr::bind_rows(severe_ipd, severe_under5)
 
-
-# ---- Final table with Severe IPD and % ----
-age_section2_final <- bind_rows(age_section2, under5_row) |>
-  left_join(age_severe_ipd_final, by = "age_group") |>
-  mutate(
-    Severe_IPD_N = tidyr::replace_na(Severe_IPD_N, 0),
-    `% of IPD`   = round(IPD_N / N_IPD * 100, 2),
-    `Severe %`   = round(
-      ifelse(IPD_N > 0, Severe_IPD_N / IPD_N * 100, NA),
-      2
-    )
-  ) |>
-  mutate(age_group = factor(age_group, levels = age_levels)) |>
-  dplyr::select(
-    age_group,
-    N_all,
-    Denominator,
-    `% Total`,
-    OPD_N,
-    IPD_N,
-    `% of IPD`,
-    Severe_IPD_N,
-    `Severe %`
-  )
-
-
+# -------------------------
+# FINAL TABLE DATA
+# -------------------------
 age_levels <- c(
   "<9 months",
   "9 months–4 years",
@@ -1679,22 +1534,29 @@ age_levels <- c(
   "≥15 years"
 )
 
-age_section2_final <- age_section2_final %>%
-  mutate(
+age_final <- dplyr::bind_rows(age_section, under5_row) %>%
+  dplyr::left_join(severe_ipd_final, by = "age_group") %>%
+  dplyr::mutate(
+    Severe_IPD_N = tidyr::replace_na(Severe_IPD_N, 0),
+    `% of IPD` = ifelse(N_IPD > 0, round(IPD_N / N_IPD * 100, 2), NA),
+    `Severe %` = ifelse(IPD_N > 0,
+                        round(Severe_IPD_N / IPD_N * 100, 2),
+                        NA),
     age_group = factor(age_group, levels = age_levels)
   ) %>%
-  arrange(age_group)
+  dplyr::arrange(age_group)
 
-age_gt <- age_section2_final %>%
-  gt() %>%
+# -------------------------
+# GT TABLE
+# -------------------------
+age_final %>%
+  gt::gt() %>%
 
-  # ---- Overall table title ----
-  tab_header(
-    title = md("**% of age groups (OPD and IPD)**")
+  gt::tab_header(
+    title = gt::md("**% of age groups (OPD and IPD)**")
   ) %>%
 
-  # ---- Column labels ----
-  cols_label(
+  gt::cols_label(
     age_group    = "Age Group",
     N_all        = "N (All)",
     Denominator  = "Denominator",
@@ -1706,122 +1568,70 @@ age_gt <- age_section2_final %>%
     `Severe %`   = "Severe %"
   ) %>%
 
-  # ✅ LEFT SIDE SPANNER (TOTAL)
-  tab_spanner(
+  # Spanners
+  gt::tab_spanner(
     label = "TOTAL",
-    columns = c(
-      N_all,
-      Denominator,
-      `% Total`,
-      OPD_N
-    )
+    columns = c(N_all, Denominator, `% Total`, OPD_N)
   ) %>%
-
-  # ✅ RIGHT SIDE SPANNER (IPD)
-  tab_spanner(
+  gt::tab_spanner(
     label = "IPD",
-    columns = c(
-      IPD_N,
-      `% of IPD`,
-      Severe_IPD_N,
-      `Severe %`
-    )
+    columns = c(IPD_N, `% of IPD`, Severe_IPD_N, `Severe %`)
   ) %>%
 
-  # ---- Alignment ----
-  cols_align(
-    align = "center",
-    columns = c(
-      N_all, Denominator, `% Total`,
-      OPD_N, IPD_N, `% of IPD`,
-      Severe_IPD_N, `Severe %`
-    )
-  ) %>%
-  cols_align(
-    align = "left",
-    columns = age_group
-  ) %>%
+  # Alignment
+  gt::cols_align("center", -age_group) %>%
+  gt::cols_align("left", age_group) %>%
 
-  # ✅ OVERALL TABLE HEADER (Yeti blue)
-  tab_style(
+  # Style
+  gt::tab_style(
     style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
     ),
-    locations = cells_title(groups = "title")
+    locations = gt::cells_title(groups = "title")
   ) %>%
 
-  # ✅ COLUMN HEADERS (blue text, bold)
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels(everything())
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels()
   ) %>%
 
-  # ✅ SPANNER HEADERS (TOTAL + IPD)
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_spanners()
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_spanners()
   ) %>%
 
-  # ✅ BODY TEXT (black)
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
-  ) %>%
-
-  # ✅ Highlight UNDER‑5 TOTAL row
-  tab_style(
+  gt::tab_style(
     style = list(
-      cell_text(weight = "bold"),
-      cell_fill(color = "#F8F9FA")
+      gt::cell_text(weight = "bold"),
+      gt::cell_fill(color = "#F8F9FA")
     ),
-    locations = cells_body(
+    locations = gt::cells_body(
       rows = age_group == "UNDER 5 TOTAL (<5 years)"
     )
   ) %>%
 
-  # ✅ Vertical divider AFTER OPD (body)
-  tab_style(
-    style = cell_borders(
-      sides = "right",
-      color = "#DEE2E6",
-      weight = px(2)
-    ),
-    locations = cells_body(columns = OPD_N)
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
   ) %>%
 
-  # ✅ Vertical divider AFTER OPD (headers)
-  tab_style(
-    style = cell_borders(
-      sides = "right",
-      color = "#DEE2E6",
-      weight = px(2)
-    ),
-    locations = cells_column_labels(columns = OPD_N)
-  ) %>%
-
-  # ---- Visual polish ----
-  opt_align_table_header(align = "left") %>%
-  cols_width(
-    age_group ~ px(230),
-    everything() ~ px(110)
+  gt::cols_width(
+    age_group ~ gt::px(230),
+    everything() ~ gt::px(110)
   )
 
-age_gt
 ```
 
 ```{r referal from }
 #| title: "Referrals"
-#| fig.asp: 1
-#| out.width: 100%
-#| fig.align: center
-#| fig.margin: 0
 
 # -----------------------------------------------------
-# SECTION 7 — REFERRAL SOURCES FOR IPD
+# REFERRALS (IPD ONLY)
 # -----------------------------------------------------
 
-# 1. Define authoritative referral mapping
+# -------------------------
+# REFERRAL FROM (sources)
+# -------------------------
 referral_map <- c(
   ocp_goyalmara  = "OCP Goyalmara",
   ocp_hoh        = "OCP HoH",
@@ -1843,199 +1653,163 @@ referral_levels <- c(
   "NJMS/HMS"
 )
 
-# 2. Clean, recode, and summarise IPD referrals (FROM)
 referral_ipd <- measles_data %>%
-  filter(ipd_opd == "IPD") %>%
-  mutate(
-    referral_from   = tolower(trimws(referral_from)),
+  dplyr::filter(ipd_opd == "IPD") %>%
+  dplyr::mutate(
+    referral_from = tolower(trimws(referral_from)),
     Referral_Source = referral_map[referral_from]
   ) %>%
-  filter(!is.na(Referral_Source)) %>%
-  count(Referral_Source, name = "N_IPD") %>%
-  complete(
+  dplyr::filter(!is.na(Referral_Source)) %>%
+  dplyr::count(Referral_Source, name = "N_IPD") %>%
+  tidyr::complete(
     Referral_Source = referral_levels,
     fill = list(N_IPD = 0)
   ) %>%
-  mutate(
+  dplyr::mutate(
     Denominator = sum(N_IPD),
-    `% of IPD`  = round(ifelse(Denominator > 0, N_IPD / Denominator * 100, 0), 2),
+    `% of IPD` = ifelse(
+      Denominator > 0,
+      round(N_IPD / Denominator * 100, 2),
+      NA
+    ),
     Referral_Source = factor(Referral_Source, levels = referral_levels)
   ) %>%
-  arrange(Referral_Source)
+  dplyr::arrange(Referral_Source)
 
-# -----------------------------------------------------
-# SECTION 8 — REFERRAL TO HIGHER-LEVEL CARE (FROM IPD)
-# -----------------------------------------------------
-
+# -------------------------
+# REFERRALS TO (outgoing)
+# -------------------------
 referral_to_ipd <- measles_data %>%
-  filter(ipd_opd == "IPD") %>%
-  mutate(
+  dplyr::filter(ipd_opd == "IPD") %>%
+  dplyr::mutate(
     referred_to = tolower(trimws(if_referred_where))
   ) %>%
-  filter(!is.na(referred_to), referred_to != "") %>%
-  mutate(
-    Referred_To = case_when(
+  dplyr::mutate(
+    Referred_To = dplyr::case_when(
       referred_to == "oca_ktp"       ~ "OCA KTP",
       referred_to == "ocp_goyalmara" ~ "OCP Goyalmara",
       TRUE                           ~ NA_character_
     )
   ) %>%
-  filter(!is.na(Referred_To)) %>%
-  count(Referred_To, name = "N") %>%
-  mutate(
+  dplyr::filter(!is.na(Referred_To)) %>%
+  dplyr::count(Referred_To, name = "N") %>%
+  dplyr::mutate(
     Denominator = N_IPD,
-    `% of IPD`  = round(N / Denominator * 100, 2)
+    `% of IPD` = ifelse(
+      N_IPD > 0,
+      round(N / N_IPD * 100, 2),
+      NA
+    )
   )
 
+# Total referred out
 total_referred_out <- referral_to_ipd %>%
-  summarise(
+  dplyr::summarise(
     Referred_To = "Total referred out (any facility)",
-    N           = sum(N),
+    N = sum(N),
     Denominator = N_IPD,
-    `% of IPD`  = round(N / Denominator * 100, 2)
+    `% of IPD` = ifelse(N_IPD > 0, round(N / N_IPD * 100, 2), NA)
   )
 
-referral_to_final <- bind_rows(referral_to_ipd, total_referred_out)
+referral_to_final <- dplyr::bind_rows(referral_to_ipd, total_referred_out)
 
-# -----------------------------------------------------
-# COMBINE WITH SUBHEADERS
-# -----------------------------------------------------
-
-from_header <- tibble(
+# -------------------------
+# COMBINE TABLE
+# -------------------------
+from_header <- tibble::tibble(
   Referral_Source = "REFERRALS FROM",
   N_IPD = NA_real_,
   Denominator = NA_real_,
   `% of IPD` = NA_real_
 )
 
-to_header <- tibble(
+to_header <- tibble::tibble(
   Referral_Source = "REFERRALS TO",
   N_IPD = NA_real_,
   Denominator = NA_real_,
   `% of IPD` = NA_real_
 )
 
-referral_from_table <- referral_ipd %>%
-  transmute(Referral_Source, N_IPD, Denominator, `% of IPD`)
-
-referral_to_table <- referral_to_final %>%
-  transmute(
-    Referral_Source = Referred_To,
-    N_IPD = N,
-    Denominator,
-    `% of IPD`
-  )
-
-referral_combined <- bind_rows(
+referral_combined <- dplyr::bind_rows(
   from_header,
-  referral_from_table,
+  referral_ipd %>% dplyr::select(Referral_Source, N_IPD, Denominator, `% of IPD`),
   to_header,
-  referral_to_table
+  referral_to_final %>%
+    dplyr::transmute(
+      Referral_Source = Referred_To,
+      N_IPD = N,
+      Denominator,
+      `% of IPD`
+    )
 )
 
-# -----------------------------------------------------
-# GT TABLE OUTPUT
-# -----------------------------------------------------
+# -------------------------
+# GT TABLE
+# -------------------------
+referral_combined %>%
+  gt::gt() %>%
 
-referral_gt <- referral_combined %>%
-  gt() %>%
-
-  # ---- Title ----
-  tab_header(
-    title = md("**Referrals IPD**")
+  gt::tab_header(
+    title = gt::md("**Referrals IPD**")
   ) %>%
 
-  # ---- Column labels ----
-  cols_label(
+  gt::cols_label(
     Referral_Source = "Referral Source",
     N_IPD           = "N referred",
     Denominator     = "Total IPD",
     `% of IPD`      = "% referred"
   ) %>%
 
-  # ---- Alignment ----
-  cols_align(
-    align = "center",
-    columns = c(N_IPD, Denominator, `% of IPD`)
-  ) %>%
-  cols_align(
-    align = "left",
-    columns = Referral_Source
+  gt::cols_align("center", c(N_IPD, Denominator, `% of IPD`)) %>%
+  gt::cols_align("left", Referral_Source) %>%
+
+  # Formatting
+  gt::fmt_number(columns = c(N_IPD, Denominator), decimals = 0) %>%
+  gt::fmt_number(columns = `% of IPD`, decimals = 1) %>%
+  gt::fmt_missing(everything(), missing_text = "") %>%
+
+  # Styling
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
   ) %>%
 
-  # ---- Typography ----
-  opt_table_font(
-    font = list(google_font("Roboto"), default_fonts())
-  ) %>%
-  opt_align_table_header(align = "left") %>%
-
-  # ---- Title bar ----
-  tab_style(
+  gt::tab_style(
     style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
     ),
-    locations = cells_title(groups = "title")
+    locations = gt::cells_title(groups = "title")
   ) %>%
 
-  # ---- Column headers ----
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels(everything())
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels()
   ) %>%
 
-  # ---- Body text ----
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
-  ) %>%
-
-  # ---- Subheaders (blue, bold) ----
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_body(
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_body(
       rows = Referral_Source %in% c("REFERRALS FROM", "REFERRALS TO")
     )
   ) %>%
 
-  # ---- Hide NA values next to subheaders (version-safe) ----
-  tab_style(
-    style = cell_text(color = "transparent"),
-    locations = cells_body(
-      rows = Referral_Source %in% c("REFERRALS FROM", "REFERRALS TO"),
-      columns = c(N_IPD, Denominator, `% of IPD`)
-    )
-  ) %>%
-
-  # ---- Column widths ----
-  cols_width(
-    Referral_Source ~ px(260),
-    everything()    ~ px(120)
+  gt::cols_width(
+    Referral_Source ~ gt::px(260),
+    everything() ~ gt::px(120)
   )
-
-# Print table
-referral_gt
 ```
 
 
 
 ```{r third tab}
 #| title: "Patient Origin"
-#| fig.asp: 1
-#| out.width: 100%
-#| fig.align: center
-#| fig.margin: 0
 
-library(dplyr)
-library(gt)
-
-# --------------------------------------------------
-# Standardise camp names
-# --------------------------------------------------
-
+# -------------------------
+# STANDARDISE CAMP NAMES
+# -------------------------
 measles_camp <- measles_data %>%
-  mutate(
-    Camp = case_when(
+  dplyr::mutate(
+    Camp = dplyr::case_when(
       camp %in% c("14", "Camp 14") ~ "Camp 14",
       camp %in% c("15", "Camp 15") ~ "Camp 15",
       camp %in% c("16", "Camp 16") ~ "Camp 16",
@@ -2043,49 +1817,54 @@ measles_camp <- measles_data %>%
     )
   )
 
-# --------------------------------------------------
-# Case counts by camp (ALL cases)
-# --------------------------------------------------
-
+# -------------------------
+# CASE COUNTS
+# -------------------------
 camp_cases <- measles_camp %>%
-  group_by(Camp) %>%
-  summarise(
-    `ALL Cases` = n(),
+  dplyr::group_by(Camp) %>%
+  dplyr::summarise(
+    `ALL Cases` = dplyr::n(),
     IPD_N       = sum(ipd_opd == "IPD", na.rm = TRUE),
     Simple_N    = sum(clinical_severity == "simple", na.rm = TRUE),
     Severe_N    = sum(clinical_severity == "severe", na.rm = TRUE),
     .groups = "drop"
   )
 
-# --------------------------------------------------
-# Camp population (for attack rate)
-# --------------------------------------------------
-
+# -------------------------
+# POPULATION
+# -------------------------
 camp_population_clean <- camp_population %>%
-  mutate(
-    Camp = case_when(
+  dplyr::mutate(
+    Camp = dplyr::case_when(
       `Camp / Location` %in% c("Camp 14", "Camp 15", "Camp 16") ~ `Camp / Location`,
       TRUE                                                     ~ "Other"
     )
   ) %>%
-  group_by(Camp) %>%
-  summarise(
-    Population = sum(`Pop (At Risk)`),
+  dplyr::group_by(Camp) %>%
+  dplyr::summarise(
+    Population = sum(`Pop (At Risk)`, na.rm = TRUE),
     .groups = "drop"
   )
 
-# --------------------------------------------------
-# Final table data (NO IPD SUBSECTION)
-# --------------------------------------------------
-
+# -------------------------
+# FINAL TABLE
+# -------------------------
 camp_table <- camp_cases %>%
-  left_join(camp_population_clean, by = "Camp") %>%
-  mutate(
+  dplyr::left_join(camp_population_clean, by = "Camp") %>%
+  dplyr::mutate(
     `% Total` = round(`ALL Cases` / sum(`ALL Cases`) * 100, 1),
-    `Attack Rate /1k` = round((`ALL Cases` / Population) * 1000, 3)
+
+    # ✅ SAFE attack rate (won’t crash if missing population)
+    `Attack Rate /1k` = ifelse(
+      !is.na(Population) & Population > 0,
+      round((`ALL Cases` / Population) * 1000, 2),
+      NA
+    )
   ) %>%
-  arrange(factor(Camp, levels = c("Camp 14", "Camp 15", "Camp 16", "Other"))) %>%
-  transmute(
+  dplyr::arrange(
+    factor(Camp, levels = c("Camp 14", "Camp 15", "Camp 16", "Other"))
+  ) %>%
+  dplyr::select(
     Camp,
     `ALL Cases`,
     `% Total`,
@@ -2095,18 +1874,17 @@ camp_table <- camp_cases %>%
     `Attack Rate /1k`
   )
 
-# --------------------------------------------------
-# GT table rendering
-# --------------------------------------------------
+# -------------------------
+# GT TABLE
+# -------------------------
+camp_table %>%
+  gt::gt() %>%
 
-camp_gt <- camp_table %>%
-  gt() %>%
-
-  tab_header(
-    title = md("**Patients Origin by Camp**")
+  gt::tab_header(
+    title = gt::md("**Patients Origin by Camp**")
   ) %>%
 
-  cols_label(
+  gt::cols_label(
     Camp              = "Camp / Location",
     `ALL Cases`       = "All Cases",
     `% Total`         = "% Total",
@@ -2116,162 +1894,162 @@ camp_gt <- camp_table %>%
     `Attack Rate /1k` = "Attack Rate /1k"
   ) %>%
 
-  cols_align("left", Camp) %>%
-  cols_align(
+  gt::cols_align("left", Camp) %>%
+  gt::cols_align(
     "right",
     c(`ALL Cases`, `% Total`, IPD_N, Simple_N, Severe_N, `Attack Rate /1k`)
   ) %>%
 
-  opt_table_font(
-    font = list(google_font("Roboto"), default_fonts())
-  ) %>%
-  opt_align_table_header(align = "left") %>%
+  # Formatting
+  gt::fmt_number(columns = c(`ALL Cases`, IPD_N, Simple_N, Severe_N), decimals = 0) %>%
+  gt::fmt_number(columns = `% Total`, decimals = 1) %>%
+  gt::fmt_number(columns = `Attack Rate /1k`, decimals = 2) %>%
+  gt::fmt_missing(everything(), missing_text = "") %>%
 
-  # Title bar
-  tab_style(
+  # Styling
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
+  ) %>%
+  gt::opt_align_table_header(align = "left") %>%
+
+  gt::tab_style(
     style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
     ),
-    locations = cells_title(groups = "title")
+    locations = gt::cells_title(groups = "title")
   ) %>%
 
-  # Column headers
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels()
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels()
   ) %>%
 
-  # Body text
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
+  gt::tab_style(
+    style = gt::cell_text(color = "black"),
+    locations = gt::cells_body()
   ) %>%
 
-  cols_width(
-    Camp ~ px(230),
-    everything() ~ px(120)
+  gt::cols_width(
+    Camp ~ gt::px(230),
+    everything() ~ gt::px(120)
   )
-
-camp_gt
 ```
 
 ```{r}
 #| title: "Co-diagnoses"
-#| fig.asp: 1
-#| out.width: 100%
-#| fig.align: center
-## Denominators#| fig.margin: 0
-# --------------------------------------------------
-
-N_IPD <- measles_data %>%
-  filter(ipd_opd == "IPD") %>%
-  nrow()
-
-N_all <- nrow(measles_data)   # ✅ ADD BACK: total cases
 
 # --------------------------------------------------
-# Long format final diagnoses (IPD only)
+# DENOMINATORS
 # --------------------------------------------------
+N_IPD <- sum(measles_data$ipd_opd == "IPD", na.rm = TRUE)
+N_all <- nrow(measles_data)
 
+# --------------------------------------------------
+# LONG FORMAT (IPD ONLY)
+# --------------------------------------------------
 final_dx_long <- measles_data %>%
-  filter(ipd_opd == "IPD") %>%
+  dplyr::filter(ipd_opd == "IPD") %>%
   dplyr::select(
-    starts_with("final_diagnoses_"),
-    -any_of("final_diagnoses_measles")
+    dplyr::starts_with("final_diagnoses_"),
+    -dplyr::any_of("final_diagnoses_measles")
   ) %>%
-  mutate(
-    across(everything(), ~ .x == "TRUE")
+  dplyr::mutate(
+    dplyr::across(
+      everything(),
+      ~ .x %in% c(TRUE, "TRUE", "true")
+    )
   ) %>%
-  pivot_longer(
+  tidyr::pivot_longer(
     cols = everything(),
     names_to  = "Diagnosis",
     values_to = "Present"
   ) %>%
-  filter(Present)
+  dplyr::filter(Present)
 
 # --------------------------------------------------
-# Co-diagnosis counts
+# SUMMARY
 # --------------------------------------------------
-
 co_dx_final <- final_dx_long %>%
-  count(Diagnosis, name = "Numerator") %>%
-  mutate(
-    `Denominator (IPD)`   = N_IPD,
-    `% of IPD Admissions` = round(Numerator / N_IPD * 100, 2),
-    `% of All Cases`      = round(Numerator / N_all * 100, 2),  # ✅ RESTORED
-    Diagnosis = gsub("final_diagnoses_", "+ ", Diagnosis),
-    Diagnosis = gsub("_", " ", Diagnosis),
-    Diagnosis = tools::toTitleCase(Diagnosis)
-  ) %>%
-  arrange(desc(Numerator))
+  dplyr::count(Diagnosis, name = "Numerator") %>%
+  dplyr::mutate(
+    `Denominator (IPD)` = N_IPD,
 
-# --------------------------------------------------
-# GT table
-# --------------------------------------------------
-
-co_dx_gt <- co_dx_final %>%
-  gt() %>%
-
-  tab_header(
-    title = md("**Co‑Diagnoses (IPD Patients)**")
-  ) %>%
-
-  cols_label(
-    Diagnosis             = "Co‑Diagnosis",
-    Numerator             = "N (IPD)",
-    `Denominator (IPD)`   = "Total IPD",
-    `% of IPD Admissions` = "% of IPD",
-    `% of All Cases`      = "% of All Cases"   # ✅ RESTORED
-  ) %>%
-
-  cols_align(align = "left", columns = "Diagnosis") %>%
-  cols_align(
-    align = "center",
-    columns = c(
-      "Numerator",
-      "Denominator (IPD)",
-      "% of IPD Admissions",
-      "% of All Cases"
-    )
-  ) %>%
-
-  opt_table_font(
-    font = list(google_font("Roboto"), default_fonts())
-  ) %>%
-  opt_align_table_header(align = "left") %>%
-
-  # Title bar
-  tab_style(
-    style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
+    `% of IPD` = ifelse(
+      N_IPD > 0,
+      round(Numerator / N_IPD * 100, 2),
+      NA
     ),
-    locations = cells_title(groups = "title")
+
+    `% of All Cases` = ifelse(
+      N_all > 0,
+      round(Numerator / N_all * 100, 2),
+      NA
+    ),
+
+    Diagnosis = stringr::str_remove(Diagnosis, "^final_diagnoses_"),
+    Diagnosis = stringr::str_replace_all(Diagnosis, "_", " "),
+    Diagnosis = paste0("+ ", stringr::str_to_title(Diagnosis))
   ) %>%
-
-  # Column headers
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels()
-  ) %>%
-
-  # Body text
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
-  ) %>%
-
-  cols_width(
-    Diagnosis ~ px(260),
-    everything() ~ px(130)
-  )
-
-co_dx_gt
-
-library(gt)
+  dplyr::arrange(dplyr::desc(Numerator))
 
 # --------------------------------------------------
+# GT TABLE
+# --------------------------------------------------
+co_dx_final %>%
+  gt::gt() %>%
+
+  gt::tab_header(
+    title = gt::md("**Co‑Diagnoses (IPD Patients)**")
+  ) %>%
+
+  gt::cols_label(
+    Diagnosis          = "Co‑Diagnosis",
+    Numerator          = "N (IPD)",
+    `Denominator (IPD)`= "Total IPD",
+    `% of IPD`         = "% of IPD",
+    `% of All Cases`   = "% of All Cases"
+  ) %>%
+
+  gt::cols_align("left", Diagnosis) %>%
+  gt::cols_align("center",
+    c(Numerator, `Denominator (IPD)`, `% of IPD`, `% of All Cases`)
+  ) %>%
+
+  # Formatting
+  gt::fmt_number(columns = Numerator, decimals = 0) %>%
+  gt::fmt_number(columns = `Denominator (IPD)`, decimals = 0) %>%
+  gt::fmt_number(columns = c(`% of IPD`, `% of All Cases`), decimals = 1) %>%
+  gt::fmt_missing(gt::everything(), missing_text = "") %>%
+
+  # Styling
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
+  ) %>%
+  gt::opt_align_table_header(align = "left") %>%
+
+  gt::tab_style(
+    style = list(
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
+    ),
+    locations = gt::cells_title(groups = "title")
+  ) %>%
+
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels()
+  ) %>%
+
+  gt::tab_style(
+    style = gt::cell_text(color = "black"),
+    locations = gt::cells_body()
+  ) %>%
+
+  gt::cols_width(
+    Diagnosis ~ gt::px(260),
+    everything() ~ gt::px(130)
+  )
 
 ```
 
@@ -2279,131 +2057,132 @@ library(gt)
 
 ```{r complications}
 #| title: "Complications IPD"
-#| fig.asp: 1
-#| out.width: 100%
-#| fig.align: center
-#| fig.margin: 0
 
-# ---- Any complication (at least one) ----
-
+# -------------------------
+# PREP COMPLICATION MATRIX
+# -------------------------
 complications_ipd <- ipd %>%
   dplyr::select(
-    starts_with("complications_"),
-    -complications_none
+    dplyr::starts_with("complications_"),
+    -dplyr::any_of("complications_none")
   ) %>%
-  mutate(across(
-    everything(),
-    ~ .x %in% c(TRUE, "TRUE", "true")
-  ))
+  dplyr::mutate(
+    dplyr::across(
+      everything(),
+      ~ .x %in% c(TRUE, "TRUE", "true")
+    )
+  )
 
-any_complication_n <- ipd |>
-  dplyr::select(
-    starts_with("complications_"),
-    -complications_none
-  ) |>
-  dplyr::mutate(across(everything(), ~ .x %in% c(TRUE, "TRUE", "true"))) |>
-  rowSums(na.rm = TRUE) |>
-  (\(x) sum(x > 0))()
+# -------------------------
+# ANY COMPLICATION
+# -------------------------
+any_complication_n <- sum(
+  rowSums(complications_ipd, na.rm = TRUE) > 0
+)
 
+# -------------------------
+# INDIVIDUAL COMPLICATIONS
+# -------------------------
 complication_prop <- complications_ipd %>%
-  summarise(across(everything(), ~ sum(.x, na.rm = TRUE))) %>%
+  dplyr::summarise(dplyr::across(everything(), ~ sum(.x, na.rm = TRUE))) %>%
   tidyr::pivot_longer(
     cols = everything(),
     names_to = "complication",
     values_to = "n"
   ) %>%
-  mutate(
+  dplyr::mutate(
     complication = stringr::str_remove(complication, "^complications_"),
-    pct = round(n / N_IPD * 100, 2)
-  )
+    complication = stringr::str_replace_all(complication, "_", " "),
+    complication = stringr::str_to_title(complication),
 
+    `% of IPD` = ifelse(
+      N_IPD > 0,
+      round(n / N_IPD * 100, 2),
+      NA
+    )
+  ) %>%
+  dplyr::arrange(dplyr::desc(n))
 
-# ---- Total complications for denominator ----
-total_complications <- sum(complication_prop$n)
+# -------------------------
+# FINAL TABLE DATA
+# -------------------------
+complications_section <- tibble::tibble(
+  `Complication Type` = c("Any complication", complication_prop$complication),
 
-# ---- Build Section 4 table ----
-complications_section4 <- tibble::tibble(
-  `Complication Type` = c(
-    "Any complication",
-    str_to_title(complication_prop$complication)
-  ),
+  `N (IPD)` = c(any_complication_n, complication_prop$n),
 
-  `N (IPD)` = c(
-    any_complication_n,
-    complication_prop$n
-  ),
-
-  Denominator = c(
-    N_IPD,
-    rep(N_IPD, nrow(complication_prop))
-  ),
+  Denominator = c(N_IPD, rep(N_IPD, nrow(complication_prop))),
 
   `% of IPD` = c(
-    round(any_complication_n / N_IPD * 100, 2),
-    round(complication_prop$n / N_IPD * 100, 2)
-  ))
+    ifelse(N_IPD > 0, round(any_complication_n / N_IPD * 100, 2), NA),
+    complication_prop$`% of IPD`
+  )
+)
 
-complications_section4 <- complications_section4 %>%
-  filter(`Complication Type` != "Any complication")
+# -------------------------
+# GT TABLE
+# -------------------------
+complications_section %>%
+  gt::gt() %>%
 
-
-complication_gt <- complications_section4 %>%
-  gt() %>%
-  
-  # Title
-  tab_header(
-    title = md("**Complications (IPD Patients)**")
+  gt::tab_header(
+    title = gt::md("**Complications (IPD Patients)**")
   ) %>%
-  
-  # Column labels
-  cols_label(
+
+  gt::cols_label(
     `Complication Type` = "Complication Type",
     `N (IPD)`           = "IPD (N)",
     Denominator         = "Total IPD",
-    `% of IPD`          = "% Compl. IPD"
+    `% of IPD`          = "% of IPD"
   ) %>%
-  
-  # Alignment
-  cols_align(align = "left", columns = "Complication Type") %>%
-  cols_align(
-    align = "center",
-    columns = c("N (IPD)", "Denominator", "% of IPD")
-  ) %>%
-  
-  # Font
-  opt_table_font(
-    font = list(google_font("Roboto"), default_fonts())
-  ) %>%
-  opt_align_table_header(align = "left") %>%
-  
-  # Title bar styling
-  tab_style(
-    style = list(
-      cell_fill(color = "#008CBA"),
-      cell_text(color = "white", weight = "bold")
-    ),
-    locations = cells_title(groups = "title")
-  ) %>%
-  
-  # Column headers styling
-  tab_style(
-    style = cell_text(color = "#008CBA", weight = "bold"),
-    locations = cells_column_labels()
-  ) %>%
-  
-  # Body text styling
-  tab_style(
-    style = cell_text(color = "black"),
-    locations = cells_body()
-  ) %>%
-  
-  # Column widths
-  cols_width(
-    `Complication Type` ~ px(260),
-    everything() ~ px(130)
-  )
 
-complication_gt
+  gt::cols_align("left", `Complication Type`) %>%
+  gt::cols_align("center", c(`N (IPD)`, Denominator, `% of IPD`)) %>%
+
+  # Formatting
+  gt::fmt_number(columns = c(`N (IPD)`, Denominator), decimals = 0) %>%
+  gt::fmt_number(columns = `% of IPD`, decimals = 1) %>%
+  gt::fmt_missing(gt::everything(), missing_text = "") %>%
+
+  # Styling
+  gt::opt_table_font(
+    font = list(gt::google_font("Roboto"), gt::default_fonts())
+  ) %>%
+  gt::opt_align_table_header(align = "left") %>%
+
+  gt::tab_style(
+    style = list(
+      gt::cell_fill(color = "#008CBA"),
+      gt::cell_text(color = "white", weight = "bold")
+    ),
+    locations = gt::cells_title(groups = "title")
+  ) %>%
+
+  gt::tab_style(
+    style = gt::cell_text(color = "#008CBA", weight = "bold"),
+    locations = gt::cells_column_labels()
+  ) %>%
+
+  gt::tab_style(
+    style = gt::cell_text(color = "black"),
+    locations = gt::cells_body()
+  ) %>%
+
+  # Highlight "Any complication"
+  gt::tab_style(
+    style = list(
+      gt::cell_text(weight = "bold"),
+      gt::cell_fill(color = "#F8F9FA")
+    ),
+    locations = gt::cells_body(
+      rows = `Complication Type` == "Any complication"
+    )
+  ) %>%
+
+  gt::cols_width(
+    `Complication Type` ~ gt::px(260),
+    everything() ~ gt::px(130)
+  )
 ```
 
 
@@ -2411,9 +2190,18 @@ complication_gt
 
 ```{r Epicurve large}
 #| padding: 0px
+
+# -------------------------
+# EPI CURVE (TILE)
+# -------------------------
 epi_curve <- ggplot(
   epi_cases,
-  aes(x = date_of_visit, y = case_id, fill = ipd_opd, text = hover_text)
+  aes(
+    x = date_of_visit,
+    y = case_id,
+    fill = ipd_opd,
+    text = hover_text
+  )
 ) +
   geom_tile(
     width = 0.9,
@@ -2427,7 +2215,11 @@ epi_curve <- ggplot(
   ) +
   labs(
     title = "Epidemic curve – measles",
-    subtitle = "April 03.04 - 26.04",
+    subtitle = paste0(
+      format(min(epi_cases$date_of_visit, na.rm = TRUE), "%d.%m"),
+      " – ",
+      format(max(epi_cases$date_of_visit, na.rm = TRUE), "%d.%m")
+    ),
     x = NULL,
     y = "Cases",
     fill = NULL
@@ -2437,16 +2229,14 @@ epi_curve <- ggplot(
     plot.title = element_text(face = "bold"),
     axis.text.x = element_text(angle = 45, hjust = 1),
     plot.margin = margin(5, 5, 5, 5),
-    legend.position = "bottom",              # move legend below plot
+    legend.position = "bottom",
     legend.box = "horizontal"
   )
 
-epi_curve_interactive <- ggplotly(
-  epi_curve,
-  tooltip = "text"
-) %>%
+# -------------------------
+# INTERACTIVE
+# -------------------------
+ggplotly(epi_curve, tooltip = "text") %>%
   config(displayModeBar = FALSE)
-
-epi_curve_interactive
 ```
 
