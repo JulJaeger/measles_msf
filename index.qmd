@@ -298,11 +298,11 @@ make_map <- function(group, color_var, label_exclude = NULL, title = NULL) {
     # LAYOUT + THEMES
     # -------------------------
     coord_sf(expand = FALSE) +
-
     labs(
-      color = rlang::as_label(rlang::enquo(color_var)),  # dynamic legend title
-      title = title
-    ) +
+  color = NULL,
+  title = title
+) +
+    guides(color = guide_legend(title = NULL)) +
 
     theme_light() +
 
@@ -364,7 +364,6 @@ legend <- cowplot::get_legend(
   maps$m1 +
     theme(
       legend.position = "bottom",
-      legend.title = element_text(face = "bold", size = 18),
       legend.text  = element_text(size = 16)
     )
 )
@@ -528,46 +527,48 @@ build_map_panel(map_1, map_2, map_3, map_4)
 
 ## Column {width="60%"}
 
-### Row {height="23%"}
+### Row {height="19%"}
 
 ```{r values 1}
 div(
-  style = "background-color:white; font-size:14px;",
-  span(strong("Total Cases: "), total_cases), br(),
-  span(strong("Weekly Cases: "), weekly_cases), br(),
+  style = "background-color:white; padding:0px; border-radius:0px; font-size:14px; line-height:1.1;" ,
+  span(strong("Total Cases: "), total_cases), style = "display:block;",
+  span(strong("Weekly Cases: "), weekly_cases), style = "display:block;",
   span(
     strong("Yesterday's Cases: "), yesterdays_cases,
-    style = "border-bottom:1px solid black; padding-bottom:2px;"
+    style = "display:block; border-bottom:1px solid black;"
+
   )
 )
+
 ```
 
 ```{r values 2}
 div(
-  style = "background-color:white; font-size:14px;",
-  span(strong("IPD Cases: "), severe_cases), br(),
-  span(strong("Weekly IPD Cases: "), weekly_severe_cases), br(),
+  style = "background-color:white; padding:0px; border-radius:0px; font-size:14px; line-height:1.1; margin:0;",
+  span(strong("IPD Cases: "), severe_cases), style = "display:block;",
+  span(strong("Weekly IPD Cases: "), weekly_severe_cases), style = "display:block;",
   span(
     strong("Yesterday's IPD Cases: "), yesterdays_severe_cases,
-    style = "border-bottom:1px solid black; padding-bottom:2px;"
+    style = "display:block; border-bottom:1px solid black;"
   )
 )
 ```
 
 ```{r values 3}
 div(
-  style = "background-color:white; font-size:14px;",
-  span(strong("OPD Cases: "), simple_cases), br(),
-  span(strong("Weekly OPD Cases: "), weekly_simple_cases), br(),
+  style = "background-color:white; padding:0px; border-radius:0px; font-size:14px; line-height:1.1; margin:0;",
+  span(strong("OPD Cases: "), simple_cases), style = "display:block;",
+  span(strong("Weekly OPD Cases: "), weekly_simple_cases), style = "display:block;",
   span(
     strong("Yesterday's OPD Cases: "), yesterdays_simple_cases,
-    style = "border-bottom:1px solid black; padding-bottom:2px;"
+    style = "display:block; border-bottom:1px solid black;"
   )
 )
 
 ```
 
-### Row {height="77%"}
+### Row {height="81%"}
 
 ```{r values 4}
 #| padding: 0px
